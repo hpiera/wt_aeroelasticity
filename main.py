@@ -28,7 +28,7 @@ if __name__ == "__main__":
     lam_tsr = 10
     yaw_angle = 0
     cosine = False
-    step = False
+    step = True
 
     ## Pitt Peters
     reduced_freq = [1.5]
