@@ -136,7 +136,7 @@ def load_element(U_inf,a,a_tan,rot_speed,centroid,R,rho,pitch,polars,yaw):
 
     return f_norm, f_tan, alpha, phi, twist, gamma
 
-
+## TODO hier
 def pittpeters(ct, v_induction, U_inf, R, dt, glauert=True):
     # Determine induction and thrust coefficient
     a = -v_induction / U_inf
@@ -150,7 +150,7 @@ def pittpeters(ct, v_induction, U_inf, R, dt, glauert=True):
 
     return v_induction_new, dv_inductiondt
 
-
+## TODO hier
 def get_v_induction_omega(U_inf=10, R=50, omega=1, yaw=0, ct_cond=[-0.5,-0.9], step=True):
     dt = 0.005
     time = np.arange(0, 20, dt)
@@ -235,7 +235,7 @@ def perform_bem(B,U_inf,rot_speed,R,r_start,pitch,lam_tsr=7,n_annuli=10,rho=1,ya
             load = f_norm*R*(outer - inner)*B
             ct = load/(1/2*rho*area*(U_inf*np.cos(yaw*np.pi/180))**2)
 
-            ## Here we include the unsteady inflow
+            ## TODO Here we include the unsteady inflow
             # a_new = get_a(ct, yaw)
             a_new = -np.interp(ct, ct_interp,v_induction_interp/U_inf)
 
