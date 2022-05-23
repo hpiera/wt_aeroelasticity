@@ -1,2 +1,2 @@
-# Rotor / Wake Aerodynamics assignments
-Rotor / Wake Aerodynamics Assignments
+# WT Aeroelasticity
+Assignment for Wind Turbin Aeroelasticity
