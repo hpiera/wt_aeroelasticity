@@ -1,6 +1,8 @@
 # Import modules
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.pylab as pl
+
 
 def BEM(TSR, dr, r_R_curr, c_curr, area_curr, twist_curr, add_Prandtl_correction, r_Rtip, r_Rroot, tol, max_n_iterations, Uinf, Radius, Omega, alpha, CL, CD, blades):
     """
@@ -142,6 +144,88 @@ def BEM(TSR, dr, r_R_curr, c_curr, area_curr, twist_curr, add_Prandtl_correction
     results_BEM = [ a_curr_cor, a_prime_curr, r_R_curr, Faxial, Fazim, gamma_curr, CT, area_curr, alpha_distrib, inflowangle_distrib, Cn, Cq ]
     return results_BEM
 
+def get_a_from_ct(ct,glauert=False):
+  if glauert:
+    ct1 = 1.816
+    ct2 = 2*np.sqrt(ct1)-ct1
+  else:
+    ct1 = 0
+    ct2 = 100
+
+  a = np.zeros(np.shape(ct))
+  a[ct>=ct2] = 1 + (ct[ct>=ct2]-ct1)/(4*(np.sqrt(ct1)-1))
+  a[ct<ct2] = 0.5 - 0.5*np.sqrt(1-ct[ct<ct2])
+  return a
+
+def get_ct_from_a(a, glauert=False):
+  ct = np.zeros(np.shape(a))
+  ct = 4*a*(1-a)
+  if glauert:
+    ct1 = 1.816
+    a1 = 1 - np.sqrt(ct1)/2
+    ct[a>a1] = ct1 - 4 * (np.sqrt(ct1) - 1) * (1 - a[a>a1])
+
+  return ct
+
+def pittpeters(ct, v_induction, Uinf, R, dt, glauert=False):
+  # Determine induction and thrust coefficient
+  a = -v_induction / Uinf
+  ct_new = - get_ct_from_a(a,glauert)
+
+  # Calculate the time derivative of the induced velocity
+  dv_inductiondt = (ct-ct_new) / (16 / (3*np.pi)) * (Uinf**2/R)
+
+  # Perform time integration
+  v_induction_new = v_induction + dv_inductiondt*dt
+
+  return v_induction_new, dv_inductiondt
+
+def unsteady(pitches):
+    CT_BEM = np.zeros((len(r_R),2))
+    a_BEM = np.zeros((len(r_R), 2))
+    for j,pitch in enumerate(pitches):
+        twist = 14 * (1 - r_R) + pitch  # local twist angle at the interface of 2 annuli in degrees
+        for i in range(len(r_R)):
+            results_BEM[i, :] = BEM(TSR, r_Rint[i + 1] - r_Rint[i], r_R[i], chord[i], Area[i], twist[i],
+                                    add_Prandtl_correction, r_Rtip, r_Rroot, tol, max_n_iterations, Uinf, Radius, Omega,
+                                    alpha, CL, CD, blades)
+        CT_BEM[:,j] = results_BEM[:,6]
+        a_BEM[:,j] = results_BEM[:,0]
+
+    # Introduce time
+    dt = 0.005
+    time = np.arange(0, 20, dt)
+
+    # Define initial CT and induction
+    ct0 = CT_BEM[:,0]
+    v_induction0 = -get_a_from_ct(-ct0) * Uinf
+
+    # Define final CT and induction
+    ct1 = CT_BEM[:, 1]
+    v_induction1 = -get_a_from_ct(-ct1) * Uinf
+
+    v_induction = np.zeros((len(time),len(ct0)))
+    for j in range(len(ct0)):
+        ct = np.zeros(np.shape(time)) + ct0[j]
+        t1 = 5
+        ct[time >= t1] = ct1[j]
+
+        v_induction[0,j] = v_induction0[j]
+
+        for i, val in enumerate(time[:-1]):
+            v_induction[i + 1,j] = pittpeters(ct[i + 1], v_induction[i,j], Uinf, Radius, dt)[0]
+
+    colors = pl.cm.cmap_d["viridis"](np.linspace(0, 1, len(r_R)))
+    plt.figure()
+    for i in range(len(r_R)):
+        if i%10 == 3:
+            plt.plot((time-t1)*Radius/Uinf, v_induction[:,i], color=colors[i])
+    plt.xlabel('tR/Uinf')
+    plt.ylabel('v_induction')
+    plt.show()
+
+    return v_induction
+
 def annuli_iterator(pitch, CT_start,limit):
     twist = 14 * (1 - r_R) + pitch  # local twist angle at the interface of 2 annuli in degrees
     for i in range(len(r_R)):
@@ -155,9 +239,13 @@ def annuli_iterator(pitch, CT_start,limit):
     a_BEM = results_BEM[:, 0]
     ct_BEM = results_BEM[:, 6]
     r_R_BEM = results_BEM[:, 2]
-    print(CT_total_BEM, pitch)
 
-    return CT_total_BEM
+    return results_BEM, CT_total_BEM
+
+def find_nearest(value, y_array, x_array):
+    array = np.asarray(y_array)
+    idx = (np.abs(array - value)).argmin()
+    return x_array[idx]
 
 if __name__ == "__main__":
     # Import lift and drag polars for the DU_airfoil, used for the wind turbine case
@@ -181,7 +269,6 @@ if __name__ == "__main__":
     Radius = 50 # Radius in meters (from requirements)
     r_Rroot = 0.2 # Scaled location of root of blade
     r_Rtip = 1 # Scaled location of tip of blade
-    pitch = np.arange(-5,5,1) # Pitch angle of the entire turbine blade in degrees
     blades = 3 # Number of blades
     rho = 1 # density of air
     N = 100 # Number of annuli
@@ -199,32 +286,23 @@ if __name__ == "__main__":
     TSR = 10
     Omega = Uinf * TSR / Radius
 
-    CT_start = 0.5
-    limit = 0.1
-    pitch_elem = np.zeros(np.shape(pitch))
-    CT_total_BEM = np.ones(np.shape(pitch))
-    CT_interp = 10000
-    while not abs(CT_interp - CT_start) < 0.0001:
-        for i, pitch_in in enumerate(pitch):
-            CT_total_BEM[i] = annuli_iterator(pitch_in,CT_start,limit)
+    CT_boundaries = [1.1, 0.4]
+    pitches = np.zeros((np.shape(CT_boundaries)))
+    for k, CT_start in enumerate(CT_boundaries):
+        pitch = np.arange(-5, 5, 1)  # Pitch angle of the entire turbine blade in degrees
+        limit = 0.5
+        pitch_elem = np.zeros(np.shape(pitch))
+        CT_total_BEM = np.ones(np.shape(pitch))
+        CT_interp = 10000
+        while not abs(CT_interp - CT_start) < 0.001:
+            for i, pitch_in in enumerate(pitch):
+                _, CT_total_BEM[i] = annuli_iterator(pitch_in,CT_start,limit)
 
-        print(CT_total_BEM, pitch)
-        pitch_interp = find_nearest(CT_start, CT_total_BEM, pitch)
-        print(f"interp = {pitch_interp}")
-
-        CT_interp = annuli_iterator(pitch_interp,CT_start,limit)
-        pitch = np.arange(pitch_interp - 2*limit, pitch_interp + 2*limit, limit/2)
-        limit = limit/10
+            pitch_interp = find_nearest(CT_start, CT_total_BEM, pitch)
+            results_BEM, CT_interp = annuli_iterator(pitch_interp,CT_start,limit)
+            pitch = np.arange(pitch_interp - 2*limit, pitch_interp + 2*limit, limit/2)
+            limit = limit/10
+        pitches[k] = pitch_interp
 
 
-    plt.figure()
-    plt.plot(r_R_BEM, a_BEM)
-    plt.xlabel('r/R')
-    plt.ylabel('a')
-    plt.show()
-
-    plt.figure()
-    plt.plot(r_R_BEM, ct_BEM)
-    plt.xlabel('r/R')
-    plt.ylabel('C_t')
-    plt.show()
+    unsteady(pitches)
