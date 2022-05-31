@@ -180,6 +180,47 @@ def pittpeters(ct, v_induction, Uinf, R, dt, glauert=False):
 
   return v_induction_new, dv_inductiondt
 
+def Oye(v_induced, Ct1, Ct2, v_int, Uinf, R, r,dt,glauert=False):
+  # Find quasi-steady induction velocity at current and at the next time step
+  v_qs1 = - get_a_from_ct(-Ct1)*Uinf
+  v_qs2 = - get_a_from_ct(-Ct2) * Uinf
+
+  # Find the current induction factor
+  a = -v_induced / Uinf
+
+  # Determine time scales from Oye model
+  t1 = 1.1/(1-1.3*a) * R / Uinf
+  t2 = (0.29-0.26*(r/R)**2)*t1
+
+  # Solve the derivative of the intermediate velocity using Oyes model
+  dv_int_dt = (v_qs1 + (v_qs2-v_qs1)/dt * 0.6 * t1 - v_int ) / t1
+
+  # Perform time integration
+  v_int2 = v_int + dv_int_dt*dt
+
+  # Determine derivative of the induced velocity
+  dv_induced_dt = ((v_int+v_int2)/2-vz)/t2
+
+  # Perform time integration
+  v_induced2 = v_induced + dv_induced_dt*dt
+
+  return v_induced2, dv_induced_dt
+
+def larsen_madsen(v_induced, Ct2, Uinf, R, dt, Glauert=False):
+    # Determine the wake velocity
+    v_wake = Uinf + v_induced
+
+    # Calculate time scale of the model
+    t = 0.5*R/v_wake
+
+    # Determine the induction velocity at the next time step
+    v_induction2 = - get_a_from_ct(-Ct2)*Uinf
+
+    # Determine new induced velocity
+    v_induced2 = v_induced*np.exp(-dt/t)+v_induction2*(1-np.exp(-dt/t))
+
+    return v_induced2
+
 def unsteady(pitches):
     CT_BEM = np.zeros((len(r_R),2))
     a_BEM = np.zeros((len(r_R), 2))
@@ -219,7 +260,7 @@ def unsteady(pitches):
     plt.figure()
     for i in range(len(r_R)):
         if i%10 == 3:
-            plt.plot((time-t1)*Radius/Uinf, v_induction[:,i], color=colors[i])
+            plt.plot((time-t1)*Radius/Uinf, (v_induction[:,i]-v_induction[0,i])/(v_induction[-1,i]-v_induction[0,i]), color=colors[i])
     plt.xlabel('tR/Uinf')
     plt.ylabel('v_induction')
     plt.show()
@@ -286,10 +327,10 @@ if __name__ == "__main__":
     TSR = 10
     Omega = Uinf * TSR / Radius
 
-    CT_boundaries = [1.1, 0.4]
+    CT_boundaries = [0.2, 1.1]
     pitches = np.zeros((np.shape(CT_boundaries)))
     for k, CT_start in enumerate(CT_boundaries):
-        pitch = np.arange(-5, 5, 1)  # Pitch angle of the entire turbine blade in degrees
+        pitch = np.arange(-7, 7, 1)  # Pitch angle of the entire turbine blade in degrees
         limit = 0.5
         pitch_elem = np.zeros(np.shape(pitch))
         CT_total_BEM = np.ones(np.shape(pitch))
