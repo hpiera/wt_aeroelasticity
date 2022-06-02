@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.pylab as pl
-
+import scipy.interpolate as sp
 
 def BEM(TSR, dr, r_R_curr, c_curr, area_curr, twist_curr, add_Prandtl_correction, r_Rtip, r_Rroot, tol, max_n_iterations, Uinf, Radius, Omega, alpha, CL, CD, blades):
     """
@@ -226,7 +226,7 @@ def unsteady(pitches):
 
     return v_induction
 
-def annuli_iterator(pitch, CT_start,limit):
+def annuli_iterator(pitch):
     twist = 14 * (1 - r_R) + pitch  # local twist angle at the interface of 2 annuli in degrees
     for i in range(len(r_R)):
         results_BEM[i, :] = BEM(TSR, r_Rint[i + 1] - r_Rint[i], r_R[i], chord[i], Area[i], twist[i],
@@ -234,11 +234,6 @@ def annuli_iterator(pitch, CT_start,limit):
                                 alpha, CL, CD, blades)
 
     CT_total_BEM = sum(results_BEM[:, 6] * results_BEM[:, 2] * delta_rR * 2)
-    a_total_BEM = sum(results_BEM[:, 0] * results_BEM[:, 2] * delta_rR * 2)
-
-    a_BEM = results_BEM[:, 0]
-    ct_BEM = results_BEM[:, 6]
-    r_R_BEM = results_BEM[:, 2]
 
     return results_BEM, CT_total_BEM
 
@@ -289,19 +284,23 @@ if __name__ == "__main__":
     CT_boundaries = [1.1, 0.4]
     pitches = np.zeros((np.shape(CT_boundaries)))
     for k, CT_start in enumerate(CT_boundaries):
-        pitch = np.arange(-5, 5, 1)  # Pitch angle of the entire turbine blade in degrees
+        pitch = np.arange(-7, 7, 1)  # Pitch angle of the entire turbine blade in degrees
         limit = 0.5
-        pitch_elem = np.zeros(np.shape(pitch))
-        CT_total_BEM = np.ones(np.shape(pitch))
         CT_interp = 10000
-        while not abs(CT_interp - CT_start) < 0.001:
+        while not abs(CT_interp - CT_start) < 0.00000001:
+            CT_total_BEM = np.zeros(np.shape(pitch))
             for i, pitch_in in enumerate(pitch):
-                _, CT_total_BEM[i] = annuli_iterator(pitch_in,CT_start,limit)
+                _, CT_total_BEM[i] = annuli_iterator(pitch_in)
 
-            pitch_interp = find_nearest(CT_start, CT_total_BEM, pitch)
-            results_BEM, CT_interp = annuli_iterator(pitch_interp,CT_start,limit)
+            # pitch_interp = find_nearest(CT_start, CT_total_BEM, pitch)
+            f = sp.interp1d(CT_total_BEM, pitch)
+            pitch_interp = f(CT_start)
+            print(pitch_interp)
+            results_BEM, CT_interp = annuli_iterator(pitch_interp)
+            print(CT_interp)
+            limit = abs(CT_start - CT_interp)*100
             pitch = np.arange(pitch_interp - 2*limit, pitch_interp + 2*limit, limit/2)
-            limit = limit/10
+            # limit = limit/10
         pitches[k] = pitch_interp
 
 
