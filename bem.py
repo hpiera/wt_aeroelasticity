@@ -238,6 +238,8 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
 
     CT_BEM = np.zeros((len(r_R),2))
     a_BEM = np.zeros((len(r_R),2))
+    alpha_BEM = np.zeros((len(r_R), 2))
+    inflow_BEM = np.zeros((len(r_R), 2))
     if ct_cond:
         for j,pitch in enumerate(input_var):
             twist = 14 * (1 - r_R) + pitch  # local twist angle at the interface of 2 annuli in degrees
@@ -247,6 +249,8 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
                                         alpha, CL, CD, blades)
             CT_BEM[:,j] = results_BEM[:,6]
             a_BEM[:,j] = results_BEM[:,0]
+            alpha_BEM[:,j] = results_BEM[:,8]
+            inflow_BEM[:,j] = results_BEM[:,9]
     else:
         for j, u_U in enumerate(input_var):
             twist = 14 * (1 - r_R) - 2
@@ -257,6 +261,8 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
                                         alpha, CL, CD, blades)
             CT_BEM[:,j] = results_BEM[:,6]
             a_BEM[:,j] = results_BEM[:,0]
+            alpha_BEM[:,j] = results_BEM[:,8]
+            inflow_BEM[:,j] = results_BEM[:,9]
     # Define initial CT and induction from all annuli
     ct0 = CT_BEM[:,0]
     v_induction0 = -get_a_from_ct(-ct0,glauert) * Uinf_lst[0]
@@ -314,6 +320,27 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
         Uinf_final = Uinf_lst[1]
         plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf_final, a, glauert,name)
 
+
+    colors = ['gray', 'black']
+    fig, ax = plt.subplots()
+    for i in range(2):
+        ax.plot(r_R, alpha_BEM[:,i], color=colors[i], label='$C_t$='+str(CT_boundaries[i]))
+    ax.set_xlabel("Radial Position [-]")
+    ax.set_ylabel("Angle of Attack [degrees]")
+    ax.legend()
+    plt.tight_layout()
+    fig.savefig(name + "_alpha" + ".pdf")
+
+    fig, ax = plt.subplots()
+    for i in range(2):
+        ax.plot(r_R, inflow_BEM[:, i], color=colors[i], label='$C_t$=' + str(CT_boundaries[i]))
+    ax.set_xlabel("Radial Position [-]")
+    ax.set_ylabel("Inflow Angle [degrees]")
+    ax.legend()
+    plt.tight_layout()
+    fig.savefig(name + "_inflow" + ".pdf")
+
+
 # Retrieve Thrust Coefficient for all annuli for a given pitch
 def annuli_iterator(pitch):
     twist = 14 * (1 - r_R) + pitch  # local twist angle at the interface of 2 annuli in degrees
@@ -343,9 +370,9 @@ def ct_condition_func(CT_boundaries):
             # pitch_interp = find_nearest(CT_start, CT_total_BEM, pitch)
             f = sp.interp1d(CT_total_BEM, pitch)
             pitch_interp = f(CT_start)
-            print(f"Pitch = {round(float(pitch_interp),2)} deg")
+            #f"Pitch = {round(float(pitch_interp),2)} deg")
             results_BEM, CT_interp = annuli_iterator(pitch_interp)
-            print(f"CT = {round(CT_interp,3)}")
+            #print(f"CT = {round(CT_interp,3)}")
             limit = abs(CT_start - CT_interp) * 100
             pitch = np.arange(pitch_interp - 2 * limit, pitch_interp + 2 * limit, limit / 2)  # limit = limit/10
         pitches[k] = pitch_interp
@@ -363,10 +390,11 @@ def plotting_step(time,t1,v_induction,ct,name):
     ax.set_ylabel("Radial Position [-]")
 
     fig.colorbar(p)
+    plt.tight_layout()
     fig.savefig(name+"_2d"+".pdf")
 
 
-    fig2, ax2 = plt.subplots(subplot_kw={"projection": "3d"})
+    fig2, ax2 = plt.subplots(figsize=(8,5), subplot_kw={"projection": "3d"})
     p2 = ax2.plot_surface(tt, rr, np.transpose(v_induction[:, :, 0]), cmap="viridis")
     ax2.view_init(30, -30)
     ax2.set_xlabel("Time [s]")
@@ -374,9 +402,10 @@ def plotting_step(time,t1,v_induction,ct,name):
     ax2.xaxis.set_major_locator(MaxNLocator(3))
     ax2.yaxis.set_major_locator(MaxNLocator(3))
 
-    ax2.set_zlabel("V_induction [m/s]")
+    ax2.set_zlabel(r"$V_{induction}$ [m/s]")
     ax2.set_zticks([])
-    fig2.colorbar(p2)
+    plt.tight_layout()
+    fig2.colorbar(p2, pad=0.1)
     fig2.savefig(name+"_3d"+".pdf")
 
     fig3, ax = plt.subplots(2)
@@ -384,16 +413,17 @@ def plotting_step(time,t1,v_induction,ct,name):
         if i % (len(r_R) / 4) == 3:
             ax[0].plot((time - t1) * Radius / Uinf,
                      (v_induction[:, i] - v_induction[0, i]) / (v_induction[-1, i] - v_induction[0, i]),
-                     color=colors[i], label=f"r_R = {round(r_R[i], 2)}")
-            ax[1].plot((time - t1),ct[:, i], color=colors[i], label=f"r_R = {round(r_R[i], 2)}")
+                     color=colors[i], label=f"r/R = {round(r_R[i], 2)}")
+            ax[1].plot((time - t1),ct[:, i], color=colors[i], label=f"r/R = {round(r_R[i], 2)}")
 
     ax[0].legend()
-    ax[0].set_xlabel('tR/Uinf [-]') # 'tR/Uinf'
-    ax[0].set_ylabel('Normalised v_induction [-]') # 'v_inductioax[]
+    ax[0].set_xlabel(r'$\frac{tR}{U_\infty}$ [-]') # 'tR/Uinf'
+    ax[0].set_ylabel(r'Normalised $v_{induction}$ [-]') # 'v_inductioax[]
 
     ax[1].legend()
     ax[1].set_xlabel('Time [s]') # 'tR/Uinf'
-    ax[1].set_ylabel('Ct [-]') # 'v_induction'
+    ax[1].set_ylabel(r'$C_t$ [-]') # 'v_induction'
+    plt.tight_layout()
 
     fig3.savefig(name+"_norm"+".pdf")
 
@@ -418,18 +448,19 @@ def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=
 
             for j, k_value in enumerate(k_reduced):
                 ind = -(np.floor(2 * np.pi / (k_value * Uinf / (r_R[ix]*Radius)) / dt)+1).astype(int)  # indices of the last full cycle to only plot 1 cycle
-                print(ind)
-                label1 = r'$\omega \frac{R}{U_\infty}=' + np.str(k_value) + '$'  # define label for the legend
+                #print(ind)
+                label1 = r'$\omega R/U_\infty=' + np.str(k_value) + '$'  # define label for the legend
                 # plot unsteady solution
                 ax[ax_i].plot(ct[ind:,ix,j], -a[ind:,ix,j], label=label1, linestyle=(0, (j + 1, j + 1)),
                                 linewidth=(6 / (j + 2)),)
 
             ax[ax_i].legend(loc=(1.04,0))
-            ax[ax_i].set_xlabel('C_t')
-            ax[ax_i].set_ylabel('a')
+            ax[ax_i].set_xlabel(r'$C_t$ [-]')
+            ax[ax_i].set_ylabel('Induction Factor [-]')
             ax[ax_i].grid()
-            ax[ax_i].set_title(f"r_R = {round(r_R[ix], 2)}")
+            ax[ax_i].set_title(f"r/R = {round(r_R[ix], 2)}")
             ax_i += 1
+            plt.tight_layout()
     fig.savefig(name+".pdf")
     plt.show()
 
@@ -471,48 +502,141 @@ if __name__ == "__main__":
     TSR = 10
     Omega = Uinf * TSR / Radius
 
-    # Get real inflow conditions that would give the requested thrust coefficient.
-    CT_boundaries = [0.9, 0.5]
-    U_boundaries = [1, 1.5]
-    models = ["pit","oye","lar"]
-    # reduced frequencies!!!
+    # Get real inflow conditions that would give the requested thrust coefficient
+    CT_boundaries_step_start = [0.5, 0.9, 0.2, 1.1]
+    CT_boundaries_step_end = [0.9, 0.5, 1.1, 0.4]
+    CT_boundaries_sinus_start = [0.5, 0.9, 0.2]
+    CT_boundaries_sinus_end = [1, 1.2, 0.9]
 
-    # Perform unsteady BEM
+    U_boundaries_step_start = [1, 1, 1, 1]
+    U_boundaries_step_end = [1.5, 0.7, 1.2, 0.9]
+    U_boundaries_sinus_start = [1, 0.7, 1.2]
+    U_boundaries_sinus_end = [1.5, 1, 1.7]
+
+    loop = [False, True]
+
+    models = ["pit", "oye", "lar"]
     glauert_cond = True
 
-    # choose whether to use ct/U and step/sinusoidal and model no.
-    ct_cond = True
-    sinusoidal_cond = True
-    n_model = 0  # 0,1,2 ==> ["pit","oye","lar"]
+    # Run over all models
+    for n_model in range(len(models)):
 
-    if ct_cond:
-        pitches = ct_condition_func(CT_boundaries)
-        input_var = pitches
-    else:
-        input_var = U_boundaries
+        # Run over CT and U input
+        for ct_cond in loop:
 
-    # use reduced frequency?
-    if sinusoidal_cond:
-        k_reduced = np.arange(0.5, 2.1, .5)
-        te = 200
-    else:
-        k_reduced = [0]
-        te = 20
+            # Run over step and sinusoidal input
+            for sinusoidal_cond in loop:
 
+                if sinusoidal_cond == False:
+                    # Reduced frequency?
+                    k_reduced = [0]
+                    te = 20
 
-    if ct_cond:
-        st1 = "CT"
-        st3 = "_".join([str(elem) for elem in CT_boundaries])
-    else:
-        st1 = "U"
-        st3 = "_".join([str(elem) for elem in U_boundaries])
+                    # Give proper name to figure
+                    st2 = "step"
 
-    if sinusoidal_cond:
-        st2 = "sinus"
-    else:
-        st2 = "step"
+                    # Select proper boundary conditions
+                    for i in range(4):
+                        CT_boundaries = [CT_boundaries_step_start[i], CT_boundaries_step_end[i]]
+                        U_boundaries = [U_boundaries_step_start[i], U_boundaries_step_end[i]]
 
-    name = f"figures/{st1}_{st2}_{st3}_{models[n_model]}"
-    unsteady(Uinf, input_var, models[n_model], k_reduced=k_reduced, te=te, ct_cond=ct_cond,glauert=glauert_cond,name=name)
+                        if ct_cond:
+                            # Select proper input parameter
+                            input_var = CT_boundaries
+
+                            # Give proper name to figure
+                            st1 = "CT"
+                            st3 = "_".join([str(elem) for elem in CT_boundaries])
+                        else:
+                            # Select proper input parameter
+                            input_var = U_boundaries
+
+                            # Give proper name to figure
+                            st1 = "U"
+                            st3 = "_".join([str(elem) for elem in U_boundaries])
+
+                        # Name figures and perform simulation
+                        print(models[n_model], st1, st2, st3)
+                        name = f"figures/{st1}_{st2}_{st3}_{models[n_model]}"
+                        unsteady(Uinf, input_var, models[n_model], k_reduced=k_reduced, te=te, ct_cond=ct_cond,
+                                 glauert=glauert_cond, name=name)
+
+                else:
+                    # Reduced frequency
+                    k_reduced = np.arange(0.5, 2.1, .5)
+                    te = 200
+
+                    # Give proper name to figure
+                    st2 = "sinus"
+
+                    # Select proper boundary conditions
+                    for i in range(3):
+                        CT_boundaries = [CT_boundaries_sinus_start[i], CT_boundaries_sinus_end[i]]
+                        U_boundaries = [U_boundaries_sinus_start[i], U_boundaries_sinus_end[i]]
+
+                        if ct_cond:
+                            # Select proper input parameter
+                            input_var = CT_boundaries
+
+                            # Give proper name to figure
+                            st1 = "CT"
+                            st3 = "_".join([str(elem) for elem in CT_boundaries])
+                        else:
+                            # Select proper input parameter
+                            input_var = U_boundaries
+
+                            # Give proper name to figure
+                            st1 = "U"
+                            st3 = "_".join([str(elem) for elem in U_boundaries])
+
+                        # Name figures and perform simulation
+                        print(models[n_model], st1, st2, st3)
+                        name = f"figures/{st1}_{st2}_{st3}_{models[n_model]}"
+                        unsteady(Uinf, input_var, models[n_model], k_reduced=k_reduced, te=te, ct_cond=ct_cond,
+                                 glauert=glauert_cond, name=name)
+
+    # # Get real inflow conditions that would give the requested thrust coefficient.
+    # CT_boundaries = [0.2, 1.1]
+    # U_boundaries = [1, 1.5]
+    # models = ["pit","oye","lar"]
+    # # reduced frequencies!!!
+    #
+    # # Perform unsteady BEM
+    # glauert_cond = True
+    #
+    # # choose whether to use ct/U and step/sinusoidal and model no.
+    # ct_cond = True
+    # sinusoidal_cond = False
+    # n_model = 1  # 0,1,2 ==> ["pit","oye","lar"]
+    #
+    # if ct_cond:
+    #     pitches = ct_condition_func(CT_boundaries)
+    #     input_var = CT_boundaries
+    # else:
+    #     input_var = U_boundaries
+    #
+    # # use reduced frequency?
+    # if sinusoidal_cond:
+    #     k_reduced = np.arange(0.5, 2.1, .5)
+    #     te = 200
+    # else:
+    #     k_reduced = [0]
+    #     te = 20
+    #
+    #
+    # if ct_cond:
+    #     st1 = "CT"
+    #     st3 = "_".join([str(elem) for elem in CT_boundaries])
+    # else:
+    #     st1 = "U"
+    #     st3 = "_".join([str(elem) for elem in U_boundaries])
+    #
+    # if sinusoidal_cond:
+    #     st2 = "sinus"
+    # else:
+    #     st2 = "step"
+    #
+    # name = f"figures/{st1}_{st2}_{st3}_{models[n_model]}"
+    # unsteady(Uinf, input_var, models[n_model], k_reduced=k_reduced, te=te, ct_cond=ct_cond,glauert=glauert_cond,name=name)
 
 
