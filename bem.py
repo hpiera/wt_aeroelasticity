@@ -164,7 +164,7 @@ def get_a_from_ct(ct,glauert=False):
 
 def get_ct_from_a(a, glauert=False):
   ct = np.zeros(np.shape(a))
-  ct = 4*a*(1-a)
+  ct += 4*a*(1-a)
   if glauert:
     ct1 = 1.816
     a1 = 1 - np.sqrt(ct1)/2
@@ -257,7 +257,6 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
                                         alpha, CL, CD, blades)
             CT_BEM[:,j] = results_BEM[:,6]
             a_BEM[:,j] = results_BEM[:,0]
-
     # Define initial CT and induction from all annuli
     ct0 = CT_BEM[:,0]
     v_induction0 = -get_a_from_ct(-ct0,glauert) * Uinf_lst[0]
@@ -273,13 +272,14 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
     a = np.zeros(np.shape(v_induction))
     # iterate over all annuli
     ct = np.zeros((len(time), len(ct0), len(k_reduced)))
+    ct_actual = np.zeros((len(time), len(ct0), len(k_reduced)))
     for j in range(len(ct0)):
         v_int = np.zeros(np.size(k_reduced))
         v_int += v_induction0[j]
         ct[:,j,:] += ct0[j]
         v_induction[0, j, :] += v_induction0[j]
         a[0, j, :] += v_induction[0, j, :]/Uinf_lst[0]
-
+        ct_actual[0, j, :] = ct0[j]
         if len(k_reduced) == 1:
             ct[time >= t1, j, :] = ct1[j]
 
@@ -304,16 +304,14 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
                 elif model == "lar":
                     v_induction[i + 1, j, ix] = larsen_madsen(ct[i + 1,j,ix], v_induction[i,j,ix], Uinf, r_R[j]*Radius, dt)
 
-                a[i + 1, j, ix] = v_induction[i + 1, j, ix]/Uinf
-
+                a[i + 1, j, ix] = -v_induction[i + 1, j, ix]/Uinf
+                ct_actual[i + 1, j, ix] = -get_ct_from_a(a[i + 1, j, ix],glauert)
     # initiate plotting procedure
     if len(k_reduced) == 1:
-        plotting_step(time,t1,v_induction)
+        plotting_step(time,t1,v_induction,ct_actual)
     else:
         Uinf_final = Uinf_lst[1]
         plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf_final, a, glauert)
-
-    return v_induction
 
 # Retrieve Thrust Coefficient for all annuli for a given pitch
 def annuli_iterator(pitch):
@@ -324,7 +322,6 @@ def annuli_iterator(pitch):
                                 alpha, CL, CD, blades)
 
     CT_total_BEM = sum(results_BEM[:, 6] * results_BEM[:, 2] * delta_rR * 2)
-
     return results_BEM, CT_total_BEM
 
 # def find_nearest(value, y_array, x_array):
@@ -354,7 +351,7 @@ def ct_condition_func(CT_boundaries):
 
     return pitches
 
-def plotting_step(time,t1,v_induction):
+def plotting_step(time,t1,v_induction,ct):
     colors = pl.cm.cmap_d["bone"](np.linspace(0, 1, len(r_R)))
 
     tt, rr = np.meshgrid(time, r_R)
@@ -365,7 +362,6 @@ def plotting_step(time,t1,v_induction):
     ax.set_ylabel("Radial Position [-]")
 
     fig.colorbar(p)
-    plt.show()
 
     fig2, ax2 = plt.subplots(subplot_kw={"projection": "3d"})
     p2 = ax2.plot_surface(tt, rr, np.transpose(v_induction[:, :, 0]), cmap="viridis")
@@ -378,17 +374,22 @@ def plotting_step(time,t1,v_induction):
     ax2.set_zlabel("V_induction [m/s]")
     ax2.set_zticks([])
     fig2.colorbar(p2)
-    plt.show()
 
-    plt.figure()
+    fig, ax = plt.subplots(2)
     for i in range(len(r_R)):
         if i % (len(r_R) / 4) == 3:
-            plt.plot((time - t1) * Radius / Uinf,
+            ax[0].plot((time - t1) * Radius / Uinf,
                      (v_induction[:, i] - v_induction[0, i]) / (v_induction[-1, i] - v_induction[0, i]),
                      color=colors[i], label=f"r_R = {round(r_R[i], 2)}")
-    plt.legend()
-    plt.xlabel('tR/Uinf')
-    plt.ylabel('v_induction')
+            ax[1].plot((time - t1),ct[:, i], color=colors[i], label=f"r_R = {round(r_R[i], 2)}")
+
+    ax[0].legend()
+    ax[0].set_xlabel('tR/Uinf [-]') # 'tR/Uinf'
+    ax[0].set_ylabel('Normalised v_induction [-]') # 'v_inductioax[]
+
+    ax[1].legend()
+    ax[1].set_xlabel('Time [s]') # 'tR/Uinf'
+    ax[1].set_ylabel('Ct [-]') # 'v_induction'
     plt.show()
 
 def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=False):
@@ -398,7 +399,7 @@ def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=
     ct_ss = np.zeros((len(r_R),nn))
     a_ss = np.zeros(np.shape(ct_ss))
     for i in range(len(ct0)):
-        ct_ss[i,:] = -np.linspace(-(ct0[i] - d_ct[i]), -(ct0[i] + d_ct[i]) + dt, nn)  # define an array of $C_T$
+        ct_ss[i,:] = np.linspace((ct0[i] - d_ct[i]), (ct0[i] + d_ct[i]), nn)  # define an array of $C_T$
         a_ss[i,:] = -get_a_from_ct(-ct_ss[i,:],glauert)  # calculate steady solution of induction as a function of $C_T$
 
     n_plots = 2
@@ -413,7 +414,7 @@ def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=
                 print(ind)
                 label1 = r'$\omega \frac{R}{U_\infty}=' + np.str(k_value) + '$'  # define label for the legend
                 # plot unsteady solution
-                ax[ax_i].plot(ct[ind:,ix,j], a[ind:,ix,j], label=label1, linestyle=(0, (j + 1, j + 1)),
+                ax[ax_i].plot(ct[ind:,ix,j], -a[ind:,ix,j], label=label1, linestyle=(0, (j + 1, j + 1)),
                                 linewidth=(6 / (j + 2)),)
 
             ax[ax_i].legend(loc=(1.04,0))
@@ -463,16 +464,18 @@ if __name__ == "__main__":
     Omega = Uinf * TSR / Radius
 
     # Get real inflow conditions that would give the requested thrust coefficient.
-    CT_boundaries = [0.9, 0.5]
+    CT_boundaries = [0.5, 0.9]
     U_boundaries = [1, 1.5]
     models = ["pit","oye","lar"]
     # reduced frequencies!!!
 
     # Perform unsteady BEM
+    glauert_cond = True
+
     # choose whether to use ct/U and step/sinusoidal and model no.
     ct_cond = False
-    sinusoidal_cond = False
-    n_model = 2  # 0,1,2 ==> ["pit","oye","lar"]
+    sinusoidal_cond = True
+    n_model = 0  # 0,1,2 ==> ["pit","oye","lar"]
 
     if ct_cond:
         pitches = ct_condition_func(CT_boundaries)
@@ -488,5 +491,5 @@ if __name__ == "__main__":
         k_reduced = [0]
         te = 20
 
-    unsteady(Uinf, input_var, models[n_model], k_reduced=k_reduced, te=te, ct_cond=ct_cond)
+    unsteady(Uinf, input_var, models[n_model], k_reduced=k_reduced, te=te, ct_cond=ct_cond,glauert=glauert_cond)
 
