@@ -228,7 +228,7 @@ def larsen_madsen(Ct2,v_induced, Uinf, R, dt, glauert=False):
     return v_induced2
 
 # Perform unsteady BEM for different pitch angles
-def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True):
+def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True, name="_"):
     # Introduce time
     dt = 0.05
     time = np.arange(0, te, dt)
@@ -306,12 +306,13 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
 
                 a[i + 1, j, ix] = -v_induction[i + 1, j, ix]/Uinf
                 ct_actual[i + 1, j, ix] = -get_ct_from_a(a[i + 1, j, ix],glauert)
+
     # initiate plotting procedure
     if len(k_reduced) == 1:
-        plotting_step(time,t1,v_induction,ct_actual)
+        plotting_step(time,t1,v_induction,ct_actual,name)
     else:
         Uinf_final = Uinf_lst[1]
-        plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf_final, a, glauert)
+        plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf_final, a, glauert,name)
 
 # Retrieve Thrust Coefficient for all annuli for a given pitch
 def annuli_iterator(pitch):
@@ -351,7 +352,7 @@ def ct_condition_func(CT_boundaries):
 
     return pitches
 
-def plotting_step(time,t1,v_induction,ct):
+def plotting_step(time,t1,v_induction,ct,name):
     colors = pl.cm.cmap_d["bone"](np.linspace(0, 1, len(r_R)))
 
     tt, rr = np.meshgrid(time, r_R)
@@ -362,6 +363,8 @@ def plotting_step(time,t1,v_induction,ct):
     ax.set_ylabel("Radial Position [-]")
 
     fig.colorbar(p)
+    fig.savefig(name+"_2d"+".pdf")
+
 
     fig2, ax2 = plt.subplots(subplot_kw={"projection": "3d"})
     p2 = ax2.plot_surface(tt, rr, np.transpose(v_induction[:, :, 0]), cmap="viridis")
@@ -374,8 +377,9 @@ def plotting_step(time,t1,v_induction,ct):
     ax2.set_zlabel("V_induction [m/s]")
     ax2.set_zticks([])
     fig2.colorbar(p2)
+    fig2.savefig(name+"_3d"+".pdf")
 
-    fig, ax = plt.subplots(2)
+    fig3, ax = plt.subplots(2)
     for i in range(len(r_R)):
         if i % (len(r_R) / 4) == 3:
             ax[0].plot((time - t1) * Radius / Uinf,
@@ -390,9 +394,12 @@ def plotting_step(time,t1,v_induction,ct):
     ax[1].legend()
     ax[1].set_xlabel('Time [s]') # 'tR/Uinf'
     ax[1].set_ylabel('Ct [-]') # 'v_induction'
+
+    fig3.savefig(name+"_norm"+".pdf")
+
     plt.show()
 
-def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=False):
+def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=False, name="_"):
     colors = pl.cm.cmap_d["bone"](np.linspace(0, 1, len(r_R)))
 
     nn = 100
@@ -423,6 +430,7 @@ def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=
             ax[ax_i].grid()
             ax[ax_i].set_title(f"r_R = {round(r_R[ix], 2)}")
             ax_i += 1
+    fig.savefig(name+".pdf")
     plt.show()
 
 if __name__ == "__main__":
@@ -464,7 +472,7 @@ if __name__ == "__main__":
     Omega = Uinf * TSR / Radius
 
     # Get real inflow conditions that would give the requested thrust coefficient.
-    CT_boundaries = [0.5, 0.9]
+    CT_boundaries = [0.9, 0.5]
     U_boundaries = [1, 1.5]
     models = ["pit","oye","lar"]
     # reduced frequencies!!!
@@ -473,7 +481,7 @@ if __name__ == "__main__":
     glauert_cond = True
 
     # choose whether to use ct/U and step/sinusoidal and model no.
-    ct_cond = False
+    ct_cond = True
     sinusoidal_cond = True
     n_model = 0  # 0,1,2 ==> ["pit","oye","lar"]
 
@@ -491,5 +499,20 @@ if __name__ == "__main__":
         k_reduced = [0]
         te = 20
 
-    unsteady(Uinf, input_var, models[n_model], k_reduced=k_reduced, te=te, ct_cond=ct_cond,glauert=glauert_cond)
+
+    if ct_cond:
+        st1 = "CT"
+        st3 = "_".join([str(elem) for elem in CT_boundaries])
+    else:
+        st1 = "U"
+        st3 = "_".join([str(elem) for elem in U_boundaries])
+
+    if sinusoidal_cond:
+        st2 = "sinus"
+    else:
+        st2 = "step"
+
+    name = f"figures/{st1}_{st2}_{st3}_{models[n_model]}"
+    unsteady(Uinf, input_var, models[n_model], k_reduced=k_reduced, te=te, ct_cond=ct_cond,glauert=glauert_cond,name=name)
+
 
