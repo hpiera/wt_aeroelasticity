@@ -172,11 +172,36 @@ def get_ct_from_a(a, glauert=False):
 
   return ct
 
+
+def tip_root_correct(no, a_in):
+    arg_tip = -blades / 2 * (r_Rtip - r_R[no]) / r_R[no] * np.sqrt(1 + ((TSR * r_R[no]) ** 2) / ((1 - a_in) ** 2))
+    Ftip = 2 / np.pi * np.arccos(np.exp(arg_tip))
+    arg_root = blades / 2 * (r_Rroot - r_R[no]) / r_R[no] * np.sqrt(1 + ((TSR * r_R[no]) ** 2) / ((1 - a_in) ** 2))
+    Froot = np.array(2 / np.pi * np.arccos(np.exp(arg_root)))
+    # bound case of "not a number"
+    if np.isnan(Froot):
+        Froot = 0
+    elif np.isnan(Ftip):
+        Ftip = 0
+    # combine the corections for the tip and the root
+    Ftotal = Ftip * Froot
+
+    # bound case of "divide by zero"
+    if Ftotal < 0.0001:
+        Ftotal = 0.0001
+
+    a = a_in / Ftotal  # Correct axial induction factor
+
+    return a, Ftotal
+
 # Unsteady models
-def pittpeters(ct, v_induction, Uinf, R, dt, glauert=False):
+def pittpeters(ct, v_induction, Uinf, R, dt, glauert=False,no=0):
   # Determine induction and thrust coefficient
-  a = -v_induction / Uinf
-  ct_new = - get_ct_from_a(a,glauert)
+  a_temp = get_a_from_ct(ct,glauert)
+  a_temp, ftotal = tip_root_correct(no,a_temp)
+  a = v_induction / Uinf * ftotal
+  # a = tip_root_correct(no,a)
+  ct_new = get_ct_from_a(a,glauert)
 
   # Calculate the time derivative of the induced velocity
   dv_inductiondt = (ct-ct_new) / (16 / (3*np.pi)) * (Uinf**2/R)
@@ -186,13 +211,20 @@ def pittpeters(ct, v_induction, Uinf, R, dt, glauert=False):
 
   return v_induction_new, dv_inductiondt
 
-def oye(Ct1, Ct2, v_induced, v_int, Uinf, R, r_R,dt,glauert=False):
+def oye(Ct1, Ct2, v_induced, v_int, Uinf, R, r_R,dt,glauert=False,no=0):
   # Find quasi-steady induction velocity at current and at the next time step
-  v_qs1 = - get_a_from_ct(-Ct1,glauert)*Uinf
-  v_qs2 = - get_a_from_ct(-Ct2,glauert)*Uinf
+  a1 = get_a_from_ct(Ct1,glauert)
+  a1,_ = tip_root_correct(no,a1)
+
+  a2 = get_a_from_ct(Ct2,glauert)
+  a2,_ = tip_root_correct(no,a2)
+
+  v_qs1 = a1*Uinf
+  v_qs2 = a2*Uinf
 
   # Find the current induction factor
-  a = -v_induced / Uinf
+  a = v_induced / Uinf
+  # a = tip_root_correct(no,a)
 
   # Determine time scales from Oye model
   t1 = 1.1/(1-1.3*a) * R / Uinf
@@ -212,7 +244,7 @@ def oye(Ct1, Ct2, v_induced, v_int, Uinf, R, r_R,dt,glauert=False):
 
   return v_induced2, v_int2
 
-def larsen_madsen(Ct2,v_induced, Uinf, R, dt, glauert=False):
+def larsen_madsen(Ct2,v_induced, Uinf, R, dt, glauert=False,no=0):
     # Determine the wake velocity
     v_wake = Uinf + v_induced
 
@@ -220,7 +252,9 @@ def larsen_madsen(Ct2,v_induced, Uinf, R, dt, glauert=False):
     t = 0.5*R/v_wake
 
     # Determine the induction velocity at the next time step
-    v_induction2 = - get_a_from_ct(-Ct2,glauert)*Uinf
+    a = get_a_from_ct(Ct2,glauert)
+    a,_ = tip_root_correct(no,a)
+    v_induction2 = a*Uinf
 
     # Determine new induced velocity
     v_induced2 = v_induced*np.exp(-dt/t)+v_induction2*(1-np.exp(-dt/t))
@@ -237,9 +271,9 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
     Uinf_lst = [Uinf, Uinf]
 
     CT_BEM = np.zeros((len(r_R),2))
-    a_BEM = np.zeros((len(r_R),2))
     alpha_BEM = np.zeros((len(r_R), 2))
     inflow_BEM = np.zeros((len(r_R), 2))
+    a_BEM = np.zeros((len(r_R), 2))
     if ct_cond:
         for j,pitch in enumerate(input_var):
             twist = 14 * (1 - r_R) + pitch  # local twist angle at the interface of 2 annuli in degrees
@@ -265,14 +299,14 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
             inflow_BEM[:,j] = results_BEM[:,9]
     # Define initial CT and induction from all annuli
     ct0 = CT_BEM[:,0]
-    v_induction0 = -get_a_from_ct(-ct0,glauert) * Uinf_lst[0]
+    v_induction0 = a_BEM[:,0] * Uinf_lst[0]
 
     # Define final CT and induction
     ct1 = CT_BEM[:, 1]
     d_ct = ct1 - ct0
     d_U = (Uinf_lst[1] - Uinf_lst[0])/Uinf
 
-    v_induction1 = -get_a_from_ct(-ct1,glauert) * Uinf_lst[1]
+    v_induction1 = get_a_from_ct(ct1,glauert) * Uinf_lst[1]
 
     v_induction = np.zeros((len(time),len(ct0),len(k_reduced)))
     a = np.zeros(np.shape(v_induction))
@@ -281,10 +315,11 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
     ct_actual = np.zeros((len(time), len(ct0), len(k_reduced)))
     for j in range(len(ct0)):
         v_int = np.zeros(np.size(k_reduced))
-        v_int += v_induction0[j]
-        ct[:,j,:] += ct0[j]
-        v_induction[0, j, :] += v_induction0[j]
-        a[0, j, :] += v_induction[0, j, :]/Uinf_lst[0]
+        v_int[:] = v_induction0[j]
+        ct[:,j,:] = ct0[j]
+        v_induction[0, j, :] = v_induction0[j]
+        a[0, j, :] = v_induction[0, j, :]/Uinf_lst[0]
+        # a[0, j, :],ftotal = tip_root_correct(j,a[0, j, 0])
         ct_actual[0, j, :] = ct0[j]
         if len(k_reduced) == 1:
             ct[time >= t1, j, :] = ct1[j]
@@ -304,15 +339,17 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
                         Uinf = Uinf_lst[1]
             # model selection
                 if model == "pit":
-                    v_induction[i + 1, j, ix] = pittpeters(ct[i + 1,j,ix], v_induction[i,j,ix], Uinf, r_R[j]*Radius, dt)[0]
+                    v_induction[i + 1, j, ix] = pittpeters(ct[i + 1,j,ix], v_induction[i,j,ix], Uinf, r_R[j]*Radius, dt, glauert,j)[0]
                 elif model == "oye":
-                    v_induction[i + 1, j, ix], v_int[ix] = oye(ct[i,j,ix], ct[i + 1,j,ix], v_induction[i,j,ix], v_int[ix], Uinf, r_R[j]*Radius, r_R[j], dt)
+                    v_induction[i + 1, j, ix], v_int[ix] = oye(ct[i,j,ix], ct[i + 1,j,ix], v_induction[i,j,ix], v_int[ix], Uinf, r_R[j]*Radius, r_R[j], dt, glauert,j)
                 elif model == "lar":
-                    v_induction[i + 1, j, ix] = larsen_madsen(ct[i + 1,j,ix], v_induction[i,j,ix], Uinf, r_R[j]*Radius, dt)
+                    v_induction[i + 1, j, ix] = larsen_madsen(ct[i + 1,j,ix], v_induction[i,j,ix], Uinf, r_R[j]*Radius, dt,glauert,j)
 
-                a[i + 1, j, ix] = -v_induction[i + 1, j, ix]/Uinf
-                ct_actual[i + 1, j, ix] = -get_ct_from_a(a[i + 1, j, ix],glauert)
+                a[i + 1, j, ix] = v_induction[i + 1, j, ix]/Uinf
+                # a[i + 1, j, ix] = tip_root_correct(j,a[i + 1, j, ix])
+                ct_actual[i + 1, j, ix] = get_ct_from_a(a[i + 1, j, ix],glauert)
 
+    ct_actual[0, :, :] = ct_actual[1, :, :]
     # initiate plotting procedure
     if len(k_reduced) == 1:
         plotting_step(time,t1,v_induction,ct_actual,name)
@@ -324,7 +361,7 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
     colors = ['gray', 'black']
     fig, ax = plt.subplots()
     for i in range(2):
-        ax.plot(r_R, alpha_BEM[:,i], color=colors[i], label='$C_t$='+str(CT_boundaries[i]))
+        ax.plot(r_R, alpha_BEM[:,i], color=colors[i], label='$U$='+str(U_boundaries[i]))
     ax.set_xlabel("Radial Position [-]")
     ax.set_ylabel("Angle of Attack [degrees]")
     ax.legend()
@@ -333,7 +370,7 @@ def unsteady(Uinf,input_var,model,k_reduced=[0],te=20,glauert=False,ct_cond=True
 
     fig, ax = plt.subplots()
     for i in range(2):
-        ax.plot(r_R, inflow_BEM[:, i], color=colors[i], label='$C_t$=' + str(CT_boundaries[i]))
+        ax.plot(r_R, inflow_BEM[:, i], color=colors[i], label='$U$=' + str(U_boundaries[i]))
     ax.set_xlabel("Radial Position [-]")
     ax.set_ylabel("Inflow Angle [degrees]")
     ax.legend()
@@ -360,7 +397,7 @@ def annuli_iterator(pitch):
 def ct_condition_func(CT_boundaries):
     pitches = np.zeros((np.shape(CT_boundaries)))
     for k, CT_start in enumerate(CT_boundaries):
-        pitch = np.arange(-7, 7, 1)  # Pitch angle of the entire turbine blade in degrees
+        pitch = np.arange(-9, 9, 1)  # Pitch angle of the entire turbine blade in degrees
         CT_interp = 10000
         while not abs(CT_interp - CT_start) < 0.001:
             CT_total_BEM = np.zeros(np.shape(pitch))
@@ -370,7 +407,7 @@ def ct_condition_func(CT_boundaries):
             # pitch_interp = find_nearest(CT_start, CT_total_BEM, pitch)
             f = sp.interp1d(CT_total_BEM, pitch)
             pitch_interp = f(CT_start)
-            #f"Pitch = {round(float(pitch_interp),2)} deg")
+            print(f"Pitch = {round(float(pitch_interp),2)} deg")
             results_BEM, CT_interp = annuli_iterator(pitch_interp)
             #print(f"CT = {round(CT_interp,3)}")
             limit = abs(CT_start - CT_interp) * 100
@@ -437,7 +474,9 @@ def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=
     a_ss = np.zeros(np.shape(ct_ss))
     for i in range(len(ct0)):
         ct_ss[i,:] = np.linspace((ct0[i] - d_ct[i]), (ct0[i] + d_ct[i]), nn)  # define an array of $C_T$
-        a_ss[i,:] = -get_a_from_ct(-ct_ss[i,:],glauert)  # calculate steady solution of induction as a function of $C_T$
+        a_ss[i,:] = get_a_from_ct(ct_ss[i,:],glauert)  # calculate steady solution of induction as a function of $C_T$
+        for j in range(len(a_ss[i,:])):
+            a_ss[i,j],_ = tip_root_correct(i,a_ss[i,j])
 
     n_plots = 2
     fig, ax = plt.subplots(n_plots)
@@ -451,7 +490,7 @@ def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=
                 #print(ind)
                 label1 = r'$\omega R/U_\infty=' + np.str(k_value) + '$'  # define label for the legend
                 # plot unsteady solution
-                ax[ax_i].plot(ct[ind:,ix,j], -a[ind:,ix,j], label=label1, linestyle=(0, (j + 1, j + 1)),
+                ax[ax_i].plot(ct[ind:,ix,j], a[ind:,ix,j], label=label1, linestyle=(0, (j + 1, j + 1)),
                                 linewidth=(6 / (j + 2)),)
 
             ax[ax_i].legend(loc=(1.04,0))
@@ -461,7 +500,7 @@ def plot_sinusoidal(v_induction, ct, ct0, d_ct, dt, k_reduced, Uinf, a, glauert=
             ax[ax_i].set_title(f"r/R = {round(r_R[ix], 2)}")
             ax_i += 1
             plt.tight_layout()
-    fig.savefig(name+".pdf")
+    fig.savefig(name+".pdf",bbox_inches='tight')
     plt.show()
 
 if __name__ == "__main__":
@@ -503,10 +542,30 @@ if __name__ == "__main__":
     Omega = Uinf * TSR / Radius
 
     # Get real inflow conditions that would give the requested thrust coefficient
+
     CT_boundaries_step_start = [0.5, 0.9, 0.2, 1.1]
     CT_boundaries_step_end = [0.9, 0.5, 1.1, 0.4]
     CT_boundaries_sinus_start = [0.5, 0.9, 0.2]
     CT_boundaries_sinus_end = [1, 1.2, 0.9]
+
+    p_b_step_start = np.zeros(np.size(CT_boundaries_step_start))
+    p_b_step_end = np.zeros(np.size(CT_boundaries_step_start))
+    p_b_sin_start = np.zeros(np.size(CT_boundaries_sinus_start))
+    p_b_sin_end = np.zeros(np.size(CT_boundaries_sinus_start))
+
+    for p in range(len(CT_boundaries_step_start)):
+        cts = [CT_boundaries_step_start[p],CT_boundaries_step_end[p]]
+        print(cts)
+        ppp = ct_condition_func(cts)
+        p_b_step_start[p] = ppp[0]
+        p_b_step_end[p] = ppp[1]
+
+    for p in range(len(CT_boundaries_sinus_start)):
+        cts = [CT_boundaries_sinus_start[p],CT_boundaries_sinus_end[p]]
+        print(cts)
+        ppp = ct_condition_func(cts)
+        p_b_sin_start[p] = ppp[0]
+        p_b_sin_end[p] = ppp[1]
 
     U_boundaries_step_start = [1, 1, 1, 1]
     U_boundaries_step_end = [1.5, 0.7, 1.2, 0.9]
@@ -515,18 +574,17 @@ if __name__ == "__main__":
 
     loop = [False, True]
 
-    models = ["pit", "oye", "lar"]
+    models = ["oye","lar"]
     glauert_cond = True
 
     # Run over all models
+    rr = tt = 0
     for n_model in range(len(models)):
 
         # Run over CT and U input
         for ct_cond in loop:
-
             # Run over step and sinusoidal input
             for sinusoidal_cond in loop:
-
                 if sinusoidal_cond == False:
                     # Reduced frequency?
                     k_reduced = [0]
@@ -537,12 +595,14 @@ if __name__ == "__main__":
 
                     # Select proper boundary conditions
                     for i in range(4):
+                        rr += 1
                         CT_boundaries = [CT_boundaries_step_start[i], CT_boundaries_step_end[i]]
+                        p_boundaries = [p_b_step_start[i], p_b_step_end[i]]
                         U_boundaries = [U_boundaries_step_start[i], U_boundaries_step_end[i]]
 
                         if ct_cond:
                             # Select proper input parameter
-                            input_var = CT_boundaries
+                            input_var = p_boundaries
 
                             # Give proper name to figure
                             st1 = "CT"
@@ -563,7 +623,7 @@ if __name__ == "__main__":
 
                 else:
                     # Reduced frequency
-                    k_reduced = np.arange(0.5, 2.1, .5)
+                    k_reduced = np.arange(0.05, 0.3, .05)
                     te = 200
 
                     # Give proper name to figure
@@ -571,12 +631,14 @@ if __name__ == "__main__":
 
                     # Select proper boundary conditions
                     for i in range(3):
+                        tt += 1
                         CT_boundaries = [CT_boundaries_sinus_start[i], CT_boundaries_sinus_end[i]]
+                        p_boundaries = [p_b_sin_start[i], p_b_sin_end[i]]
                         U_boundaries = [U_boundaries_sinus_start[i], U_boundaries_sinus_end[i]]
 
                         if ct_cond:
                             # Select proper input parameter
-                            input_var = CT_boundaries
+                            input_var = p_boundaries
 
                             # Give proper name to figure
                             st1 = "CT"
@@ -595,6 +657,7 @@ if __name__ == "__main__":
                         unsteady(Uinf, input_var, models[n_model], k_reduced=k_reduced, te=te, ct_cond=ct_cond,
                                  glauert=glauert_cond, name=name)
 
+                print(f"step: {rr}/{len(models)*len(loop)*4}, sinus: {tt}/{len(models)*len(loop)*3}")
     # # Get real inflow conditions that would give the requested thrust coefficient.
     # CT_boundaries = [0.2, 1.1]
     # U_boundaries = [1, 1.5]
