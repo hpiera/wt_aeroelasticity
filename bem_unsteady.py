@@ -211,6 +211,39 @@ def nc_normal_force(dalpha_qs_dt, c, time, Uinf, v_sos = 343):
 
     return Cn_nc
 
+def pressure_lag(Cn_p, time, Uinf, chord):
+    s_array = get_s_from_time(time, Uinf, chord)
+    Tp = 1.7
+    Dpf = np.zeros(np.shape(time))
+    for i, s in enumerate(s_array[:-1]):
+        ds = s_array[i+1] - s_array[i]
+        Dpf[i+1] = Dpf[i] * np.exp(-ds/Tp) + (Cn_p[i+1] - Cn_p[i])*np.exp(-ds/(2*Tp))
+
+    return Dpf
+
+def boundary_layer_lag(F_p, time, Uinf, chord):
+    s_array = get_s_from_time(time, Uinf, chord)
+    Tf = 3.0
+    Dbl = np.zeros(np.shape(time))
+    for i, s in enumerate(s_array[:-1]):
+        ds = s_array[i+1] - s_array[i]
+        Dbl[i + 1] = Dbl[i] * np.exp(-ds / Tf) + (F_p[i + 1] - F_p[i]) * np.exp(-ds / (2 * Tf))
+    return Dbl
+
+def leading_edge(Cn_f, alpha_eq, time, Uinf, chord):
+    Cn1 = 1.0093
+    s_array = get_s_from_time(time, Uinf, chord)
+    tau_v = np.zeros(np.shape(time))
+    for i in range(len(s_array)-1):
+        ds = s_array[i+1] - s_array[i]
+        dalpha_eq = alpha_eq[i+1] - alpha_eq[i]
+        if Cn_f[i] < Cn1 and dalpha_eq > 0:
+            tau_v[i+1] = 0
+        else:
+            tau_v[i+1] = tau_v[i] + 0.45*ds
+
+    return tau_v
+
 if __name__ == "__main__":
     # Import lift and drag polars for the DU_airfoil, used for the wind turbine case
     data = np.genfromtxt("DU_airfoil.txt", delimiter=",")
@@ -272,7 +305,15 @@ if __name__ == "__main__":
     Cn_c = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     Cn_nc = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     Cn_p = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Cn_p_prime = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     Cn_st = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Dpf = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    alpha_f = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    F_p = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Dbl = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    F_bl = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Cn_f = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    tau_v = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
 
     results_BEM = np.zeros((len(r_R_range), 12))
 
@@ -321,14 +362,34 @@ if __name__ == "__main__":
         for i in range(len(r_R_range)):
             Cn_st[k, :, i] = steady
 
-    plt.figure()
-    plt.plot(Cn_c[1,:,0], label="Cn_c")
-    plt.plot(Cn_nc[1, :, 0], label="Cn_nc")
-    plt.plot(Cn_p[1, :, 0], label="Cn_p")
-    plt.show()
+        for i, r_R in enumerate(r_R_range):
+            chord = 3 * (1 - r_R) + 1  # Chord in meters (from requirements)
+            Dpf[k,:,i] = pressure_lag(Cn_p[k,:,i], t_array, Uinf, chord)
+
+            Cn_p_prime[k,:,i] = Cn_p[k,:,i] - Dpf[k,:,i]
+            alpha_f[k,:,i] = Cn_p_prime[k,:,i]/dCl_dalpha_new + alpha0
+            F_p[k,:,i] = np.interp(alpha_f[k,:,i], alpha, F)
+
+            Dbl[k,:,i] = boundary_layer_lag(F_p[k,:,i], t_array, Uinf, chord)
+            F_bl[k,:,i] = F_p[k,:,i] - Dbl[k,:,i]
+
+            Cn_f[k,:,i] = dCl_dalpha_new * ((1+np.sqrt(F_bl[k,:,i]))/2)**2 *(alpha_eq[k,:,i] - alpha0) + Cn_nc[k,:,i]
+
+            tau_v[k,:,i] = leading_edge(Cn_f[k,:,i], alpha_eq[k,:,i], t_array, Uinf, chord)
+
+    # plt.figure()
+    # plt.plot(Cn_c[1,:,0], label="Cn_c")
+    # plt.plot(Cn_nc[1, :, 0], label="Cn_nc")
+    # plt.plot(Cn_p[1, :, 0], label="Cn_p")
+    # plt.show()
+
+    # plt.figure()
+    # plt.plot(Cn_nc[1,:,0])
+    # #plt.plot(alpha, 2*np.pi*np.pi/180*(alpha-alpha0))
+    # #plt.plot(alpha, F)
+    # plt.show()
 
     plt.figure()
-    plt.plot(alpha, CL)
-    plt.plot(alpha, 2*np.pi*np.pi/180*(alpha-alpha0))
-    plt.plot(alpha, F)
+    plt.plot(alpha_new, F_p[1,:,0])
     plt.show()
+
