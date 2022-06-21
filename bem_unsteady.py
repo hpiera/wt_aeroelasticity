@@ -200,6 +200,17 @@ def duhamel_approx(Xlag, Ylag, delta_s, delta_alpha):
 
     return Xlag1, Ylag1
 
+def nc_normal_force(dalpha_qs_dt, c, time, Uinf, v_sos = 343):
+    dt = time[1] - time[0]
+    Ka = 0.75
+    Dnc = np.zeros(np.shape(time))
+    for i,t in enumerate(time[:-1]):
+        Dnc[i+1] = Dnc[i]*np.exp(-v_sos*dt/(Ka*c)) + (dalpha_qs_dt[i+1] - dalpha_qs_dt[i])*np.exp(-v_sos*dt/(2*Ka*c))
+
+    Cn_nc = 4*Ka*c/Uinf*(dalpha_qs_dt - Dnc)
+
+    return Cn_nc
+
 if __name__ == "__main__":
     # Import lift and drag polars for the DU_airfoil, used for the wind turbine case
     data = np.genfromtxt("DU_airfoil.txt", delimiter=",")
@@ -214,6 +225,8 @@ if __name__ == "__main__":
 
     # Plotted the polar and get alpha at which Cl=0
     alpha0 = -1.945 #degrees
+
+    F = 2*np.pi*np.pi/180*(alpha-alpha0) - CL
 
     # Amount of iterations
     max_n_iterations = 100
@@ -242,12 +255,12 @@ if __name__ == "__main__":
     # Define reduced frequency
     k_reduced = [0, 0.3]
     te = 500
-    Nt = 10000
+    Nt = 100
     t_array = np.linspace(0,te,Nt)
     dt = t_array[1]-t_array[0]
 
     # Define annuli
-    dr = Radius/50
+    dr = 1/50
     r_R_range = [0.3, 0.5, 0.7, 0.9]
     pitch = -2
 
@@ -255,6 +268,12 @@ if __name__ == "__main__":
     alpha_qs = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     cl_alpha = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     alpha_eq = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    dalpha_qs_dt = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Cn_c = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Cn_nc = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Cn_p = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Cn_st = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+
     results_BEM = np.zeros((len(r_R_range), 12))
 
     for k, k_red in enumerate(k_reduced):
@@ -265,16 +284,18 @@ if __name__ == "__main__":
         Xlag = Ylag = np.zeros((len(t_array), len(r_R_range)))
 
         # loop over time
+        Uinf = U1 + DeltaU*np.cos(omega*t_array)
         for j, t in enumerate(t_array[:-1]):
-            Uinf = U1 + DeltaU*np.cos(omega*t)
+            Uinf_val = Uinf[j]
             for i, r_R in enumerate(r_R_range):
                 twist = 14 * (1 - r_R) + pitch
                 chord = 3 * (1 - r_R) + 1  # Chord in meters (from requirements)
-                s_array = get_s_from_time(t_array, Uinf, chord)
+                s_array = get_s_from_time(t_array, Uinf_val, chord)
                 r = r_R * Radius  # Middle of annulus in meters
-                Area = np.pi * ((r_R* Radius - dr/2) ** 2 - (r_R * Radius + dr/2) ** 2)  # Area of each streamtube
+                Area = np.pi * ((( r_R + dr/2)* Radius) ** 2 - ((r_R-dr/2) * Radius) ** 2)  # Area of each streamtube
                 results_BEM[i, :] = BEM(TSR, dr, r_R, chord, Area, twist, add_Prandtl_correction, r_Rtip, r_Rroot, tol,
-                    max_n_iterations, Uinf, Radius, Omega, alpha, CL, CD, blades)
+                    max_n_iterations, Uinf_val, Radius, Omega, alpha, CL, CD, blades)
+            ## note that the last one will not get overwritten, might cause problems
             alpha_qs[k, j, :] = results_BEM[:,8]
             cl_alpha[k, j, :] = np.interp(alpha_qs[k, j, :], alpha, dCl_dalpha)
 
@@ -283,5 +304,31 @@ if __name__ == "__main__":
                 Xlag[j+1,i], Ylag[j+1,i] = duhamel_approx(Xlag[j,i], Ylag[j,i], (s_array[j+1]-s_array[j])/dt, (alpha_qs[k, j+1, i]-alpha_qs[k, j, i])/dt)
                 alpha_eq[k, j, i] = alpha_qs[k, j, i] - Xlag[j, i] - Ylag[j, i]
 
+        Cn_c[k, :, :] = cl_alpha[k, :, :]*(alpha_eq[k,:,:] - alpha0)
+        for i, r_R in enumerate(r_R_range):
+            dalpha_qs_dt[k,:,i] = np.gradient(alpha_qs[k,:,i])
+            chord = 3 * (1 - r_R) + 1  # Chord in meters (from requirements)
+            Cn_nc[k,:,i] = nc_normal_force(dalpha_qs_dt[k,:,i], chord, t_array, Uinf, v_sos=343)
+
+        Cn_p[k, :, :] = Cn_c[k, :, :] + Cn_nc[k, :, :]
+
+        alpha_new = np.linspace(alpha[0], alpha[-1], len(alpha_eq[0, :, 0]))
+        dCl_dalpha_new = np.interp(alpha_new, alpha, dCl_dalpha)
+        F_new = np.interp(alpha_new, alpha, F)
+        F_new[F_new<0] = 0
+
+        steady = dCl_dalpha_new*((1+np.sqrt(F_new))/2)**2*(alpha_new-alpha0)
+        for i in range(len(r_R_range)):
+            Cn_st[k, :, i] = steady
+
     plt.figure()
-    plt.plot(alpha_eq)
+    plt.plot(Cn_c[1,:,0], label="Cn_c")
+    plt.plot(Cn_nc[1, :, 0], label="Cn_nc")
+    plt.plot(Cn_p[1, :, 0], label="Cn_p")
+    plt.show()
+
+    plt.figure()
+    plt.plot(alpha, CL)
+    plt.plot(alpha, 2*np.pi*np.pi/180*(alpha-alpha0))
+    plt.plot(alpha, F)
+    plt.show()
