@@ -7,7 +7,7 @@ import matplotlib
 from matplotlib.ticker import MaxNLocator
 
 
-# matplotlib.use('Qt5Agg')
+#matplotlib.use('Qt5Agg')
 
 # BEM
 def BEM(TSR, dr, r_R_curr, c_curr, area_curr, twist_curr, add_Prandtl_correction, r_Rtip, r_Rroot, tol,
@@ -179,7 +179,7 @@ def get_s_from_time(time, Uinf, chord):
     return s
 
 def get_time_from_s(s, Uinf, chord):
-    time = s*c/2/Uinf
+    time = s*chord/2/Uinf
     return time
 
 # # Determine quasi-steady angle of attack
@@ -225,9 +225,14 @@ def boundary_layer_lag(F_p, time, Uinf, chord):
     s_array = get_s_from_time(time, Uinf, chord)
     Tf = 3.0
     Dbl = np.zeros(np.shape(time))
+    ds = np.zeros(np.shape(time))
     for i, s in enumerate(s_array[:-1]):
-        ds = s_array[i+1] - s_array[i]
-        Dbl[i + 1] = Dbl[i] * np.exp(-ds / Tf) + (F_p[i + 1] - F_p[i]) * np.exp(-ds / (2 * Tf))
+        ds[i] = s_array[i+1] - s_array[i]
+        Dbl[i + 1] = Dbl[i] * np.exp(-ds[i] / Tf) + (F_p[i + 1] - F_p[i]) * np.exp(-ds[i] / (2 * Tf))
+
+    # plt.figure()
+    # plt.plot(ds)
+    # plt.show()
     return Dbl
 
 def leading_edge(Cn_f, alpha_eq, time, Uinf, chord):
@@ -243,6 +248,24 @@ def leading_edge(Cn_f, alpha_eq, time, Uinf, chord):
             tau_v[i+1] = tau_v[i] + 0.45*ds
 
     return tau_v
+
+def vortex_shedding(tau_v, C_v, time, Uinf, chord):
+    s_array = get_s_from_time(time, Uinf, chord)
+    Tv = 6
+    Tvl = 5
+    Cn_v = np.zeros(np.shape(time))
+    for i in range(len(s_array)-1):
+        ds = s_array[i + 1] - s_array[i]
+        if tau_v[i]>0 and tau_v[i]<Tvl:
+            Cn_v[i+1] = Cn_v[i]*np.exp(-ds/Tv) + (C_v[i+1] - C_v[i])*np.exp(-ds/(2*Tv))
+        else:
+            Cn_v[i+1] = Cn_v[i]*np.exp(-ds/Tv)
+    return Cn_v
+
+def find_nearest(value, y_array):
+    array = np.asarray(y_array)
+    idx = (np.abs(array - value)).argmin()
+    return idx
 
 if __name__ == "__main__":
     # Import lift and drag polars for the DU_airfoil, used for the wind turbine case
@@ -260,6 +283,7 @@ if __name__ == "__main__":
     alpha0 = -1.945 #degrees
 
     F = 2*np.pi*np.pi/180*(alpha-alpha0) - CL
+    f_trial = (2*np.sqrt(CL/(2*np.pi*(alpha-alpha0)))-1)**2
 
     # Amount of iterations
     max_n_iterations = 100
@@ -287,8 +311,8 @@ if __name__ == "__main__":
 
     # Define reduced frequency
     k_reduced = [0, 0.3]
-    te = 500
-    Nt = 100
+    te = 100
+    Nt = 500
     t_array = np.linspace(0,te,Nt)
     dt = t_array[1]-t_array[0]
 
@@ -314,7 +338,9 @@ if __name__ == "__main__":
     F_bl = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     Cn_f = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     tau_v = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
-
+    C_v = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Cn_v = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    Cn_t = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     results_BEM = np.zeros((len(r_R_range), 12))
 
     for k, k_red in enumerate(k_reduced):
@@ -356,11 +382,12 @@ if __name__ == "__main__":
         alpha_new = np.linspace(alpha[0], alpha[-1], len(alpha_eq[0, :, 0]))
         dCl_dalpha_new = np.interp(alpha_new, alpha, dCl_dalpha)
         F_new = np.interp(alpha_new, alpha, F)
+        f_trial_new = np.interp(alpha_new, alpha, f_trial)
         F_new[F_new<0] = 0
+        F_new = (1 - F_new/abs(F_new[-1]))
 
+        F_new = f_trial_new
         steady = dCl_dalpha_new*((1+np.sqrt(F_new))/2)**2*(alpha_new-alpha0)
-        for i in range(len(r_R_range)):
-            Cn_st[k, :, i] = steady
 
         for i, r_R in enumerate(r_R_range):
             chord = 3 * (1 - r_R) + 1  # Chord in meters (from requirements)
@@ -368,14 +395,31 @@ if __name__ == "__main__":
 
             Cn_p_prime[k,:,i] = Cn_p[k,:,i] - Dpf[k,:,i]
             alpha_f[k,:,i] = Cn_p_prime[k,:,i]/dCl_dalpha_new + alpha0
-            F_p[k,:,i] = np.interp(alpha_f[k,:,i], alpha, F)
+            # for x in range(len(t_array)):
+            #     ind = find_nearest(alpha_f[k,x,i], alpha_new)
+            #     F_p[k,x,i] = F_new[ind]
+            F_p[k,:,i] = F_new #np.interp(alpha_f[k,:,i], alpha, F)
 
             Dbl[k,:,i] = boundary_layer_lag(F_p[k,:,i], t_array, Uinf, chord)
             F_bl[k,:,i] = F_p[k,:,i] - Dbl[k,:,i]
 
-            Cn_f[k,:,i] = dCl_dalpha_new * ((1+np.sqrt(F_bl[k,:,i]))/2)**2 *(alpha_eq[k,:,i] - alpha0) + Cn_nc[k,:,i]
+            for x in range(len(t_array)):
+                value = alpha_eq[k,x,i] - alpha0
+                ind = find_nearest(value, alpha_new)
+                Cn_f[k,x,i] = dCl_dalpha_new[x] * ((1+np.sqrt(F_bl[k,ind,i]))/2)**2 * (alpha_eq[k,x,i] - alpha0) + Cn_nc[k,x,i]
 
             tau_v[k,:,i] = leading_edge(Cn_f[k,:,i], alpha_eq[k,:,i], t_array, Uinf, chord)
+
+            C_v[k,:,i] = Cn_p[k,:,i] * (1-((1+np.sqrt(F_bl[k,:,i]))/2)**2)
+            Cn_v[k,:,i] = vortex_shedding(tau_v[k,:,i], C_v[k,:,i], t_array, Uinf, chord)
+
+            Cn_t[k,:,i] = Cn_f[k,:,i] + Cn_v[k,:,i]
+
+    # Remove last point
+    F_bl[F_bl < 0] = 0
+    Cn_t = Cn_t[:,:-1,:]
+    alpha_new = alpha_new[:-1]
+
 
     # plt.figure()
     # plt.plot(Cn_c[1,:,0], label="Cn_c")
@@ -387,9 +431,35 @@ if __name__ == "__main__":
     # plt.plot(Cn_nc[1,:,0])
     # #plt.plot(alpha, 2*np.pi*np.pi/180*(alpha-alpha0))
     # #plt.plot(alpha, F)
+    # # plt.show()
+    #
+    # plt.figure()
+    # plt.plot(F_p[1,:,0], Dbl[1,:,0], '.')
     # plt.show()
+    #
+
+    ind = -(np.floor(2 * np.pi / (k_reduced[1] * 10 / (r_R_range[0] * Radius)) / dt) + 1).astype(int)
+
+
+    # we will only plot the last cycle
+    Ncycles = np.floor(t_array[-1] * Omega / (2 * np.pi))
+    n_of_cycle = t_array * Omega / (2 * np.pi)  # calculate the phase of the different points of the cycle
+    i1 = np.argmin(np.abs(n_of_cycle - (Ncycles - 1)))  # index of start of cycle plotted
+    i2 = np.argmin(np.abs(n_of_cycle - (Ncycles - .5)))  # index of 180 degrees
+    i3 = np.argmin(np.abs(n_of_cycle - (Ncycles)))  # index of 360 degrees
+    print(i1)
+    print(i3)
 
     plt.figure()
-    plt.plot(alpha_new, F_p[1,:,0])
+    plt.plot(alpha_eq[1,i1:i3,0], Cn_t[1,i1:i3,0],'.')
     plt.show()
-
+    #
+    # plt.figure()
+    # plt.plot(alpha_new, F_bl[1, :-1, 0])
+    # plt.plot(alpha_new, F_new[:-1])
+    # plt.show()
+    #
+    # plt.figure()
+    # plt.plot(alpha_new, F_p[1,:-1,0])
+    # plt.plot(alpha_new, F_new[:-1])
+    # plt.show()
