@@ -174,11 +174,35 @@ def tip_root_correct(no, a_in):
 
     return a, Ftotal
 
-def time2semichord(time):
+def time2semichord(time, Uinf, chord):
     return 2*Uinf*time/chord
 
-def semichord2time(s):
+def semichord2time(s, Uinf, chord):
     return s/2/Uinf*chord
+
+
+# determining X and Y terms for recursive marching formula for approximation of Duhamel's integral
+def duhamel_approx(Xi, Yi, delta_s, delta_alpha, order=2, A1=0.3, A2=0.7, b1=0.14, b2=0.53):
+    # A1=0.165,A2=0.335,b1=0.0455,b2=0.3
+    # determine the next values of X and Y, named Xip1 and Yip1
+    if order == 1:
+        Xip1 = Xi * np.exp(-b1 * delta_s) + A1 * delta_alpha
+        Yip1 = Yi * np.exp(-b2 * delta_s) + A2 * delta_alpha
+    elif order == 2:
+        Xip1 = Xi * np.exp(-b1 * delta_s) + A1 * delta_alpha * np.exp(-b1 * delta_s / 2)
+        Yip1 = Yi * np.exp(-b2 * delta_s) + A2 * delta_alpha * np.exp(-b2 * delta_s / 2)
+    else:
+        Xip1 = Xi * np.exp(-b1 * delta_s) + A1 * delta_alpha * (
+                    (1 + 4 * np.exp(-b1 * delta_s / 2) + np.exp(-b1 * delta_s)) / 6)
+        Yip1 = Yi * np.exp(-b2 * delta_s) + A2 * delta_alpha * (
+                    (1 + 4 * np.exp(-b2 * delta_s / 2) + np.exp(-b2 * delta_s)) / 6)
+
+    return Xip1, Yip1
+
+
+# define function for circulatory force, potential flow
+def circulatory_normal_force(dCn_dalpha, alpha_equivalent, alpha0):
+    return dCn_dalpha * (alpha_equivalent - alpha0)
 
 # define properties of the system
 dt=.1
@@ -208,7 +232,7 @@ alpha0=-1.945/180*np.pi # alpha for which normal load is zero in steady flow
 
 # Import lift and drag polars for the DU_airfoil, used for the wind turbine case
 data = np.genfromtxt("DU_airfoil.txt", delimiter=",")
-alpha = data[:, 0]  # Angle of attack in degrees
+alpha_polar = data[:, 0]  # Angle of attack in degrees
 CL = data[:, 1]  # Lift coefficient polar
 CD = data[:, 2]  # Drag coefficient polar
 
@@ -224,55 +248,72 @@ max_n_iterations = 1000
 tol = 1e-3
 U1 = Uinf*1
 DeltaU = 0.5
-te = 100
-Nt = 500
-t_array = np.linspace(0,te,Nt)
 
 Omega = k_red * Uinf / Radius
-Uinf = U1 + DeltaU*np.cos(Omega*t_array)
-alphaqs = np.zeros(len(t_array))
-for j, t in enumerate(t_array):
+Uinf = U1 + DeltaU*np.cos(Omega*time)
+alphaqs = np.zeros(len(time))
+for j, t in enumerate(time):
     Uinf_val = Uinf[j]
-    Omega = k_red * Uinf_val / Radius
+    omega = k_red * Uinf_val / Radius
     results_BEM = BEM(TSR, dr, r_R, chord, Area, twist, add_Prandtl_correction, r_Rtip, r_Rroot, tol,
-                    max_n_iterations, Uinf_val, Radius, Omega, alpha, CL, CD, blades)
+                    max_n_iterations, Uinf_val, Radius, omega, alpha_polar, CL, CD, blades)
     ## note that the last one will not get overwritten, might cause problems
     alphaqs[j] = results_BEM[8]
 
-print(alpha.shape)
-alpha_x = np.linspace(0,len(alpha), len(alpha))
-alpha = np.interp(t_array, alpha_x, alpha)
-print(alpha.shape)
-print(alphaqs.shape)
+alpha_x = np.linspace(0,len(alpha_polar), len(alpha_polar))
+alpha_polar = np.interp(time, alpha_x, alpha_polar)
 # define the array semi-chord time scale
-sarray = time2semichord(t_array)
+sarray = time2semichord(time, Uinf, chord)
 
 # # calculate quasi-steady alpha
+# dalpha_dt = np.gradient(alpha, t_array)
 # alpha0=-1.945/180*np.pi # alpha for which normal load is zero in steady flow
-# alphaqs = alpha + dalpha_dt*(chord/2)/Uinf #- dhplg_dt/Uinf
-# dalphaqs_dt=np.gradient(alphaqs,time) # calculate the time derivative of the quasi-steady alpha
-#
-# # calculate the coefficient of normal force assuming quasi-steady flow asuming potential flow
-# Cnormal_quasisteady = 2*np.pi*(alphaqs-alpha0)
+# alphaqs = alpha + dalpha_dt*(chord/2)/Uinf - dhplg_dt/Uinf
 
-# we plot the effective quasi-steady angle of attack \alpha_{qs}
+dalphaqs_dt = np.gradient(alphaqs, time) # calculate the time derivative of the quasi-steady alpha
+# calculate the coefficient of normal force assuming quasi-steady flow asuming potential flow
+Cnormal_quasisteady = 2*np.pi*(alphaqs-alpha0)
+
+# define arrays for X,Y and alpha_equivalent
+Xarray=np.zeros(np.shape(time))
+Yarray=np.zeros(np.shape(time))
+
+# define the array of alpha_equivalent
+alpha_equivalent=np.zeros(np.shape(time))
+alpha_equivalent[0]=alphaqs[0]
+
+# march solution in time for alpha_E
+for i,val in enumerate(time[:-1]):
+    Xarray[i+1],Yarray[i+1]=duhamel_approx(Xarray[i],Yarray[i],sarray[i+1]-sarray[i],alphaqs[i+1]-alphaqs[i])
+
+alpha_equivalent=alphaqs-Xarray-Yarray
+
+# plot solutions of test of duhamel_approx
 
 # plot figure
 plt.rcParams.update({'font.size': 14}) #, 'figure.dpi':150, 'savefig.dpi':150})
 plt.rcParams["font.family"] = "serif" # define font
-plt.rcParams["mathtext.fontset"] = "dejavuserif"  # define font
-cmap = plt.get_cmap('BuGn')  # define colormap
-fig,ax = plt.subplots(figsize=[6,6]) # define pointers for the figure and axes
-ax.plot(alpha*180/np.pi, alphaqs*180/np.pi,color='black', linewidth=1) # plot equivalent quasi-steady angle of attack
-ax.set_xlabel(r'$\alpha (^\circ)$') # set x-label
-ax.set_ylabel(r'$\alpha_{qs} (^\circ)$') # set y-label
-# add arrows to indicate the direction of the cycle
-parr1=ax.annotate('', xy=(17.5, 20), xytext=(10,12.5),
-            arrowprops=dict(color='black', shrink=0.05, width=.5, headwidth=3,headlength=4, linewidth=.2))
-parr1=ax.annotate('', xy=(10, 7.5), xytext=(17.7,15),
-            arrowprops=dict(color='black', shrink=0.05, width=.5, headwidth=3,headlength=4, linewidth=.2))
-plt.grid() # add a grid
-ax.set_xlim(0,30) # define limits of the axis
+plt.rcParams["mathtext.fontset"] = "dejavuserif" # define font
+cmap = plt.get_cmap('BuGn') # define colormap
+fig,ax = plt.subplots(figsize=[6,6]) # define pointers for figure and axes
+
+
+#we will only plot the last cycle
+Ncycles = np.floor(time[-1]*Omega/(2*np.pi)) # determine number of cycles
+n_of_cycle = time*omega/(2*np.pi) # calculate the phase of the different points of the cycle
+i1=np.argmin(np.abs(n_of_cycle-(Ncycles-1))) # index of start of cycle plotted
+i2=np.argmin(np.abs(n_of_cycle-(Ncycles-.5))) # index of 180 degrees
+i3=np.argmin(np.abs(n_of_cycle-(Ncycles))) # index of 360 degrees
+
+# plot last cycle of the simulation, steady, quasi-steady and unsteady equivalent angle of attack
+#ax.plot(time2semichord(n_of_cycle[i1:i3]-n_of_cycle[i1], Uinf, chord), alpha[i1:i3]*180/np.pi,color='blue',linestyle='--', label=r'$\alpha$')
+ax.plot(time2semichord(n_of_cycle[i1:i3]-n_of_cycle[i1], Uinf, chord), alphaqs[i1:i3]*180/np.pi,color='red',linestyle='-.', label=r'$\alpha_{qs}$')
+ax.plot(time2semichord(n_of_cycle[i1:i3]-n_of_cycle[i1], Uinf, chord), alpha_equivalent[i1:i3]*180/np.pi,color='green',linestyle='-', label=r'$\alpha_{eq}$')
+ax.set_xlabel('s semichords') # set x-label
+ax.set_ylabel(r'$(^\circ)$') # set y-label
+ax.set_xlim(0,2) # define limits of the axis
 ax.set_ylim(0,30) # define limits of the axis
+ax.grid() # add grid
+ax.legend(loc='lower left')
 plt.tight_layout() # all elements of figure inside plot area
 plt.show() # show figure
