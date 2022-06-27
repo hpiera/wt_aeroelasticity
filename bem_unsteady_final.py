@@ -150,7 +150,7 @@ def BEM(TSR, dr, r_R_curr, c_curr, area_curr, twist_curr, add_Prandtl_correction
         inflowangle_distrib = phi
         current_iter = current_iter + 1
     results_BEM = [a_curr_cor, a_prime_curr, r_R_curr, Faxial, Fazim, gamma_curr, CT, area_curr, alpha_distrib,
-                   inflowangle_distrib, Cn, Cq]
+                   inflowangle_distrib, Cn, Cq,Cl]
     return results_BEM
 
 def tip_root_correct(no, a_in):
@@ -175,7 +175,7 @@ def tip_root_correct(no, a_in):
     return a, Ftotal
 
 def get_s_from_time(time, Uinf, chord):
-    s = 2*Uinf*time/chord
+    s = 2*Uinf_steady*time/chord
     return s
 
 def get_time_from_s(s, Uinf, chord):
@@ -187,7 +187,9 @@ def get_time_from_s(s, Uinf, chord):
 #     alpha_qs = alpha + chord/(2*Uinf) * np.gradient(theta, time) - 1/Uinf * np.gradient(h, time)
 #     return alpha_qs
 
-def duhamel_approx(Xlag, Ylag, delta_s, delta_alpha):
+def duhamel_approx(time, Uinf, chord, alphaqs):
+    s_array = get_s_from_time(time, Uinf, chord)
+
     # Define Wagner constants
     A1 = 0.165
     A2 = 0.335
@@ -195,10 +197,15 @@ def duhamel_approx(Xlag, Ylag, delta_s, delta_alpha):
     b2 = 0.3
 
     # Determine lag states
-    Xlag1 = Xlag * np.exp(-b1 * delta_s) + A1 * delta_alpha * np.exp(-b1*delta_s/2)
-    Ylag1 = Ylag * np.exp(-b2 * delta_s) + A2 * delta_alpha * np.exp(-b2*delta_s/2)
+    Xlag = np.zeros(np.shape(time))
+    Ylag = np.zeros(np.shape(time))
+    for i, s in enumerate(s_array[:-1]):
+        ds = s_array[i+1] - s_array[i]
+        delta_alpha = alphaqs[i+1] - alphaqs[i]
+        Xlag[i+1] = Xlag[i] * np.exp(-b1 * ds) + A1 * delta_alpha * np.exp(-b1*ds/2)
+        Ylag[i+1] = Ylag[i] * np.exp(-b2 * ds) + A2 * delta_alpha * np.exp(-b2*ds/2)
 
-    return Xlag1, Ylag1
+    return Xlag, Ylag
 
 def nc_normal_force(dalpha_qs_dt, c, time, Uinf, v_sos = 343):
     dt = time[1] - time[0]
@@ -225,38 +232,37 @@ def boundary_layer_lag(F_p, time, Uinf, chord):
     s_array = get_s_from_time(time, Uinf, chord)
     Tf = 3.0
     Dbl = np.zeros(np.shape(time))
-    ds = np.zeros(np.shape(time))
     for i, s in enumerate(s_array[:-1]):
-        ds[i] = s_array[i+1] - s_array[i]
-        Dbl[i + 1] = Dbl[i] * np.exp(-ds[i] / Tf) + (F_p[i + 1] - F_p[i]) * np.exp(-ds[i] / (2 * Tf))
+        ds = s_array[i+1] - s_array[i]
+        Dbl[i + 1] = Dbl[i] * np.exp(-ds / Tf) + (F_p[i + 1] - F_p[i]) * np.exp(-ds / (2 * Tf))
 
-    # plt.figure()
-    # plt.plot(ds)
-    # plt.show()
     return Dbl
 
-def leading_edge(Cn_f, alpha_eq, time, Uinf, chord):
+def leading_edge(Cn_p_prime, da, time, Uinf, chord):
     Cn1 = 1.0093
     s_array = get_s_from_time(time, Uinf, chord)
     tau_v = np.zeros(np.shape(time))
     for i in range(len(s_array)-1):
         ds = s_array[i+1] - s_array[i]
-        dalpha_eq = alpha_eq[i+1] - alpha_eq[i]
-        if Cn_f[i+1] > Cn1 and dalpha_eq > 0:
-            tau_v[i+1] = 0
-        elif Cn_f[i+1] > Cn1:
-            tau_v[i+1] = tau_v[i] + 0.45*ds
-
+        # I think his code is a bit weird, because it really depends on which reduced frequency you take
+        if Cn_p_prime[i+1] > Cn1:
+            tau_v[i + 1] = tau_v[i] + 0.45* ds
+        else:
+            if da[i+1]<0 and tau_v[i]>0:
+                tau_v[i + 1] = tau_v[i] + 0.45* ds
+            else:
+                tau_v[i + 1] = 0
     return tau_v
 
 def vortex_shedding(tau_v, C_v, time, Uinf, chord):
     s_array = get_s_from_time(time, Uinf, chord)
     Tv = 6
+    # this value below is really dependent on the frequency you put in, Im not sure what to take
     Tvl = 5
     Cn_v = np.zeros(np.shape(time))
     for i in range(len(s_array)-1):
         ds = s_array[i + 1] - s_array[i]
-        if 0 < tau_v[i + 1] < Tvl:
+        if 0.001 < tau_v[i] < Tvl:
             Cn_v[i+1] = Cn_v[i]*np.exp(-ds/Tv) + (C_v[i+1] - C_v[i])*np.exp(-ds/(2*Tv))
         else:
             Cn_v[i+1] = Cn_v[i]*np.exp(-ds/Tv)
@@ -266,6 +272,17 @@ def find_nearest(value, y_array):
     array = np.asarray(y_array)
     idx = (np.abs(array - value)).argmin()
     return idx
+
+def plot_total_results(i1,i3):
+    plt.figure()
+    plt.plot(np.rad2deg(alpha_qs[freq_pos,i1:i3,an_pos]),Cn_BEM[freq_pos,i1:i3,an_pos],label=r"$Cn_{steady}$")
+    plt.plot(np.rad2deg(alpha_qs[freq_pos,i1:i3,an_pos]),Cn_c[freq_pos,i1:i3,an_pos],label=r"$Cn_c$")
+    plt.plot(np.rad2deg(alpha_qs[freq_pos,i1:i3,an_pos]),Cn_nc[freq_pos,i1:i3,an_pos],label=r"$Cn_{nc}$")
+    plt.plot(np.rad2deg(alpha_qs[freq_pos,i1:i3,an_pos]),Cn_p_prime[freq_pos,i1:i3,an_pos],label=r"$Cn_{p_{prime}}$")
+    plt.plot(np.rad2deg(alpha_qs[freq_pos,i1:i3,an_pos]),Cn_f[freq_pos,i1:i3,an_pos],label=r"$Cn_f$")
+    plt.plot(np.rad2deg(alpha_qs[freq_pos,i1:i3,an_pos]),Cn_v[freq_pos,i1:i3,an_pos],label=r"$Cn_v$")
+    plt.plot(np.rad2deg(alpha_qs[freq_pos,i1:i3,an_pos]),Cn_t[freq_pos,i1:i3,an_pos],label=r"$Cn_t$")
+    plt.legend()
 
 if __name__ == "__main__":
     # Import lift and drag polars for the DU_airfoil, used for the wind turbine case
@@ -280,13 +297,7 @@ if __name__ == "__main__":
     dCl_dalpha = np.gradient(CL, alpha)
 
     # Plotted the polar and get alpha at which Cl=0
-    alpha0 = -1.945 #degrees
-
-    # Im not sure this is correct. maybe we should take the CL from BEM instead which actually has a time dependence.
-    # then interpolate with the F we have here.
-
-    F_sep = 2 * np.pi * np.pi / 180 * (alpha - alpha0) - CL
-    f_trial = (2*np.sqrt(CL/(2*np.pi*(alpha-alpha0)))-1)**2
+    alpha0 = np.deg2rad(-1.945) #degrees
 
     # Amount of iterations
     max_n_iterations = 100
@@ -306,23 +317,32 @@ if __name__ == "__main__":
 
     # Define tip speed ratio and rotational speed omega
     TSR = 8
-    Omega_rotor = Uinf_steady * TSR / Radius
+    Omega_rotor = TSR*Uinf_steady/Radius
 
     # Define inflow conditions
     U1 = 1*Uinf_steady
+
+    # it is actually nicer if you start at a lower wind speed
     DeltaU = 0.5*Uinf_steady
 
     # Define reduced frequency
-    k_reduced = [0, 0.3]
-    te = 600
-    Nt = 100
+    k_reduced = [0., 0.3]
+    te = 400
+    Nt = 10000
+
     t_array = np.linspace(0,te,Nt)
     dt = t_array[1]-t_array[0]
 
     # Define annuli
+
     dr = 1/50
     r_R_range = [0.3, 0.5, 0.7, 0.9]
     pitch = -2
+
+    # TODO Change these for plotting.
+    an_pos = 0 # [0, 1, 2, 3]  r_R_range = [0.3, 0.5, 0.7, 0.9]
+    freq_pos = 1 # [0, 1] k_reduced = [0,0.3]
+
 
     # Initialize solution space
     alpha_qs = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
@@ -345,147 +365,106 @@ if __name__ == "__main__":
     Cn_v = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     Cn_t = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
     Cn_BEM = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
-
-    results_BEM = np.zeros((len(r_R_range), 12))
+    Cn_alpha_eq_grad = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    CT_BEM = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    a_BEM = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    v_induction = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    a = np.zeros((len(k_reduced), len(t_array), len(r_R_range)))
+    results_BEM = np.zeros((len(r_R_range), 13))
+    omega = np.zeros(len(k_reduced))
 
     for k, k_red in enumerate(k_reduced):
         # loop over all reduced frequencies of the inflow conditions
-        omega = k_red * Uinf_steady / Radius
+        omega[k] = k_red * Uinf_steady / Radius
 
         # Initialize lag states
-        Xlag = Ylag = np.zeros((len(t_array), len(r_R_range)))
+        Xlag = np.zeros((len(t_array), len(r_R_range)))
+        Ylag = np.zeros((len(t_array), len(r_R_range)))
 
-        # loop over time
-        Uinf = U1 + DeltaU*np.cos(omega*t_array)
+        # loop over time. I added azimuthal like this, ik makes things a bit harder but okay
+        # TODO check if azimuthal discretization like this is correct
+        Uinf = U1 + DeltaU*np.cos(omega[k]*t_array)*np.cos(Omega_rotor*t_array)
         for j, t in enumerate(t_array[:-1]):
             Uinf_val = Uinf[j]
             for i, r_R in enumerate(r_R_range):
                 # Iterate over different annuli
                 twist = 14 * (1 - r_R) + pitch
                 chord = 3 * (1 - r_R) + 1  # Chord in meters (from requirements)
-                s_array = get_s_from_time(t_array, Uinf_val, chord)
                 r = r_R * Radius  # Middle of annulus in meters
                 Area = np.pi * ((( r_R + dr/2)* Radius) ** 2 - ((r_R-dr/2) * Radius) ** 2)  # Area of each streamtube
                 results_BEM[i, :] = BEM(TSR, dr, r_R, chord, Area, twist, add_Prandtl_correction, r_Rtip, r_Rroot, tol,
                                         max_n_iterations, Uinf_val, Radius, Omega_rotor, alpha, CL, CD, blades)
-            ## note that the last one will not get overwritten, might cause problems
-            alpha_qs[k, j, :] = results_BEM[:,8] # AoA value for all annuli, at all times, at all frequency
-            Cn_BEM[k,j,:] = results_BEM[:,10]
-            cl_alpha[k, j, :] = np.interp(alpha_qs[k, j, :], alpha, dCl_dalpha) # gradient of cl to alpha for alpha_qs
-
-            # Determine lag states
-            for i, r_R in enumerate(r_R_range):
-                Xlag[j+1,i], Ylag[j+1,i] = duhamel_approx(Xlag[j,i], Ylag[j,i], (s_array[j+1]-s_array[j]), (alpha_qs[k, j+1, i]-alpha_qs[k, j, i]))
-                alpha_eq[k, j+1, i] = alpha_qs[k, j+1, i] - Xlag[j+1, i] - Ylag[j+1, i]
-
-        # Calculate circulatory normal force for every frequency, time and annulus
-        # Cn_c[k, :, :] = cl_alpha[k, :, :]*(alpha_eq[k,:,:] - alpha0)
-        Cn_c[k, :, :] = 2*np.pi*np.deg2rad((alpha_eq[k,:,:] - alpha0))
+            # Here we get our angle of attack per annuli in time for the quasi steady case
+            alpha_qs[k, j, :] = np.deg2rad(results_BEM[:,8]) # AoA value for all annuli, at all times, at all frequency
+            # TODO Slide 19 For the given angle of attack, the steady lift coefficient was take from BEM
+            Cn_BEM[k,j,:] = results_BEM[:,12]
+            CT_BEM[k,j, :] = results_BEM[:, 6]
+            a_BEM[k,j, :] = results_BEM[:, 0]
+            # cl_alpha[k, j, :] = np.interp(alpha_qs[k, j, :], alpha, dCl_dalpha) # gradient of cl to alpha for alpha_qs
 
         for i, r_R in enumerate(r_R_range):
+            chord = 3 * (1 - r_R) + 1
+            # here all lag states are introduced from aeroelasticity. All angles are in radians
+            Xlag[:,i], Ylag[:,i] = duhamel_approx(t_array, Uinf, chord, alpha_qs[k, :, i])
+            alpha_eq[k, :, i] = alpha_qs[k, :, i] - Xlag[:, i] - Ylag[:, i]
+            # Cn_alpha_eq_grad[k, :, i] = np.gradient(Cn_BEM[k, :, i], alpha_qs[k, :, i])
+
+        # TODO SLIDE 13 not sure if this should be 2pi or the actual steady CL-alpha gradient
+        Cn_c[k, :, :] = 2*np.pi*(alpha_eq[k,:,:] - alpha0)
+        # Cn_c[k, :, :] = Cn_alpha_eq_grad[k, :, :]*(alpha_eq[k,:,:] - alpha0)
+
+        for i, r_R in enumerate(r_R_range):
+            # TODO SLIDE 16. I think it is correct. but it really depends on the frequency if the nc contributes
             dalpha_qs_dt[k,:,i] = np.gradient(alpha_qs[k,:,i],t_array)
             chord = 3 * (1 - r_R) + 1  # Chord in meters (from requirements)
             Cn_nc[k,:,i] = nc_normal_force(dalpha_qs_dt[k,:,i], chord, t_array, Uinf, v_sos=343)
 
+        # TODO SLIDE 17 circ + non-circ
         Cn_p[k, :, :] = Cn_c[k, :, :] + Cn_nc[k, :, :]
 
-        # I think these interpolations are not necessary
-        alpha_new = np.linspace(alpha[0], alpha[-1], len(t_array)) # alpha array
-        dCl_dalpha_new = np.interp(alpha_new, alpha, dCl_dalpha) # array of cl_alpha polar data
-
-        # # probably wrong way to get F
-        # F_sep_longer = np.interp(alpha_new, alpha, F_sep)
-        #
-        # F_sep_longer[F_sep_longer < 0] = 0
-        # F_sep_longer = (1 - F_sep_longer / abs(F_sep_longer[-1]))
-
-        # # probably not necessary
-        # steady = dCl_dalpha_new * ((1 + np.sqrt(F_sep_longer)) / 2) ** 2 * (alpha_new - alpha0)
 
         for i, r_R in enumerate(r_R_range):
-
-            # f_trial = (2 * np.sqrt(Cn_BEM[k, :, i] / (2 * np.pi * (alpha_eq[k,:,i] - alpha0))) - 1) ** 2
-            # # probably right way to get F. Interpolation seems unnecessary
-            # # f_trial_new = np.interp(alpha_new, alpha, f_trial)
-            # F_sep_longer = f_trial
-
-
             chord = 3 * (1 - r_R) + 1  # Chord in meters (from requirements)
 
+            # TODO SLIDE 20. Since we already had our steady Cn, we do this first. Leading-edge pressure lage
             Dpf[k,:,i] = pressure_lag(Cn_p[k,:,i], t_array, Uinf, chord)
 
             Cn_p_prime[k,:,i] = Cn_p[k,:,i] - Dpf[k,:,i]
-            # this is a new equivelent AoA for some reason. It is actually time dependent so the indexing is correct
-            # alpha_f[k,:,i] = Cn_p_prime[k,:,i]/dCl_dalpha_new + alpha0
+            # not sure if this should be 2pi or the actual steady CL-alpha gradient
             alpha_f[k,:,i] = Cn_p_prime[k,:,i]/(2*np.pi) + alpha0
 
-            f_trial = (2 * np.sqrt(Cn_BEM[k, :, i] / (2 * np.pi * (alpha_f[k, :, i] - alpha0))) - 1) ** 2
+            # TODO SLIDE 19. TE separation: Get the sep. factor data from the steady case from BEM for the new alpha_f
+            f_trial = (2 * np.sqrt(Cn_BEM[k, :, i] / (2*np.pi * (alpha_f[k, :, i] - alpha0))) - 1) ** 2
             # probably right way to get F. Interpolation seems unnecessary
-            # f_trial_new = np.interp(alpha_new, alpha, f_trial)
-            F_sep_longer = f_trial
-
-
-            # for x in range(len(t_array)):
-            #     ind = find_nearest(alpha_f[k,x,i], alpha_new)
-            #     F_p[k,x,i] = F_sep_longer[ind]
-
 
             # it is really not necessary to save this in time. It just by choice hase the same length, but it is
             # irrespective of both frequency and annulus. So it is fine, but confusing.
-            F_p[k,:,i] = F_sep_longer #np.interp(alpha_f[k,:,i], alpha, F_sep)
+            F_p[k,:,i] = f_trial #np.interp(alpha_f[k,:,i], alpha, F_sep)
 
-            # this is what annoys me. know all of a sydden we are going the make the thing time dependent, which would
-            # mean we actually need another array for the chord/AoA dependency. But in his explanation F_p is all of
-            # a sudden time dependent as well, which it isnt! so F_p[i+1] - F_P[i] == 0, cause they are the same...
-            # but then Dbl will always stay zero...
+            # TODO SLIDE 21: Boundary layer development lag
             Dbl[k,:,i] = boundary_layer_lag(F_p[k,:,i], t_array, Uinf, chord)
             F_bl[k,:,i] = F_p[k,:,i] - Dbl[k,:,i]
-
+            # unsteady nonlinear normal force coefficient
             Cn_f[k, :, i] = 2*np.pi * ((1 + np.sqrt(F_bl[k, :, i])) / 2) ** 2 * (
                         alpha_eq[k, :, i] - alpha0) + Cn_nc[k, :, i]
 
-            # for x in range(len(t_array)):
-            #     # I think this is just plain incorrect. indexing is a mess. and is it the right alpha_eq?
-            #
-            #     # this finds the closest index in the polar data for alpha, which is the correct data for F_bl as well
-            #     # then, since it shouldnt be time dependent. Plain interpolation would be better.
-            #     # F_value = np.interp((alpha_eq - alhpa0), alpha_new, F_bl[k,:,i])
-            #     value = alpha_eq[k,x,i] - alpha0
-            #     ind = find_nearest(value, alpha_new)
-            #     Cn_f[k,x,i] = dCl_dalpha_new[x] * ((1+np.sqrt(F_bl[k,ind,i]))/2)**2 * (alpha_eq[k,x,i] - alpha0) + Cn_nc[k,x,i]
-
-            tau_v[k,:,i] = leading_edge(Cn_f[k,:,i], alpha_eq[k,:,i], t_array, Uinf, chord)
-
-            C_v[k,:,i] = Cn_p[k,:,i] * (1-((1+np.sqrt(F_bl[k,:,i]))/2)**2)
+            # TODO SLIDE 23. LE flow separation. This module behaves weirdly and is much dependent on the frequency
+            tau_v[k,:,i] = leading_edge(Cn_p_prime[k, :, i], dalpha_qs_dt[k, :, i], t_array, Uinf, chord)
+            # TODO SLIDE 24 Vortex shedding. His code puts in Cn_c, but his slide Cn_p. Im not sure
+            C_v[k,:,i] = Cn_c[k,:,i] * (1-((1+np.sqrt(F_bl[k,:,i]))/2)**2)
             Cn_v[k,:,i] = vortex_shedding(tau_v[k,:,i], C_v[k,:,i], t_array, Uinf, chord)
-
+            # TODO SLIDE 25 Total unsteady non-linear normal force coefficient
             Cn_t[k,:,i] = Cn_f[k,:,i] + Cn_v[k,:,i]
 
+    i1 = 5230
+    i3 = 5330
 
+    plot_total_results(i1,i3)
 
-    # Clean up weird things with the time and plotting
-    # F_bl[F_bl < 0] = 0
-    # Cn_t = Cn_t[:,:-1,:]
-    # alpha_new = alpha_new[:-1]
-
-
-    # find index of last loop
-    ind = -(np.floor(2 * np.pi / (k_reduced[1] * 10 / (r_R_range[0] * Radius)) / dt) + 1).astype(int)
-
-    # we will only plot the last cycle
-    Ncycles = np.floor(t_array[-1] * Omega_rotor / (2 * np.pi))
-    n_of_cycle = t_array * Omega_rotor / (2 * np.pi)  # calculate the phase of the different points of the cycle
-    i1 = np.argmin(np.abs(n_of_cycle - (Ncycles - 1)))  # index of start of cycle plotted
-    i2 = np.argmin(np.abs(n_of_cycle - (Ncycles - .5)))  # index of 180 degrees
-    i3 = np.argmin(np.abs(n_of_cycle - (Ncycles)))  # index of 360 degrees
-    print(i1)
-    print(i3)
-
+    # TODO, see below
+    # check this plot to find indexes between peaks (high and low frequencies)
+    # run the file with python console, change i1 and i3 to the required values necessary in the console
+    # fill in the plotting function above in the python console with desired i1 and i3, then see the results
     plt.figure()
-    plt.plot(alpha_eq[1,:-1,0], Cn_t[1,:-1,0],'.')
+    plt.plot(Uinf)
     plt.show()
-
-    # plt.figure()
-    # plt.plot(alpha_qs[1,:-1,2])
-    # plt.show()
-
